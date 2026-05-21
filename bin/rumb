@@ -1,0 +1,15 @@
+#!/usr/bin/env sh
+set -eu
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+RUMB_HOME=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
+export RUMB_HOME
+export RUMB_SHIM="$SCRIPT_DIR/rumb"
+
+BINARY="$RUMB_HOME/target/debug/rumb"
+
+if [ ! -x "$BINARY" ]; then
+  cargo build --manifest-path "$RUMB_HOME/Cargo.toml" --bin rumb >/dev/null
+fi
+
+exec "$BINARY" "$@"
