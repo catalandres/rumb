@@ -1159,21 +1159,28 @@ impl RumbProject {
             fs::create_dir_all(parent)?;
         }
 
-        let status = Command::new("git")
+        let output = Command::new("git")
             .arg("worktree")
             .arg("add")
             .arg("-b")
             .arg(&claim.branch)
             .arg(&worktree)
             .current_dir(&self.root)
-            .status()?;
-        if status.success() {
+            .output()?;
+        if output.status.success() {
             Ok(())
         } else {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
             Err(RumbError::GitFailed(format!(
-                "git worktree add -b {} {} exited with {status}",
+                "git worktree add -b {} {} exited with {}{}",
                 claim.branch,
-                worktree.display()
+                worktree.display(),
+                output.status,
+                if stderr.is_empty() {
+                    String::new()
+                } else {
+                    format!(": {stderr}")
+                }
             )))
         }
     }

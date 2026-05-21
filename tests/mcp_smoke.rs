@@ -107,6 +107,25 @@ fn init_git_repo(path: &std::path::Path) {
     assert!(status.success());
 }
 
+fn init_git_repo_with_commit(path: &std::path::Path) {
+    init_git_repo(path);
+    let status = Command::new("git")
+        .arg("-c")
+        .arg("user.email=rumb@example.invalid")
+        .arg("-c")
+        .arg("user.name=Rumb Test")
+        .arg("-c")
+        .arg("commit.gpgsign=false")
+        .arg("commit")
+        .arg("--allow-empty")
+        .arg("-m")
+        .arg("init")
+        .current_dir(path)
+        .status()
+        .unwrap();
+    assert!(status.success());
+}
+
 #[test]
 fn mcp_server_initializes_and_lists_rumb_tools() {
     let dir = tempfile::tempdir().unwrap();
@@ -186,4 +205,77 @@ fn mcp_tools_create_ready_and_log_structured_repo_state() {
     assert_eq!(events[0]["object_id"], "RUMB-0001");
     assert_eq!(events[0]["payload"]["kind"], "feature");
     assert_eq!(events[0]["payload"]["status"], "ready");
+}
+
+#[test]
+fn mcp_tools_claim_run_and_release_in_temp_git_repo() {
+    let dir = tempfile::tempdir().unwrap();
+    init_git_repo_with_commit(dir.path());
+    let mut client = McpClient::start(dir.path());
+    client.initialize();
+
+    client.call_tool("init", json!({ "name": "rumb" }));
+    let item = client.call_tool(
+        "item_create",
+        json!({
+            "kind": "feature",
+            "title": "MCP claim run",
+            "parent": "RUMB-0000",
+            "status": "ready",
+            "source": "mcp-claim-run-smoke",
+        }),
+    );
+    assert_eq!(item["id"], "RUMB-0001");
+
+    let claim = client.call_tool(
+        "claim",
+        json!({
+            "id": "RUMB-0001",
+            "actor": "mcp-smoke",
+            "confirm_foundation": true,
+        }),
+    );
+    assert_eq!(claim["id"], "CLAIM-0001");
+    assert_eq!(claim["item_id"], "RUMB-0001");
+    assert_eq!(claim["actor_id"], "mcp-smoke");
+    assert_eq!(claim["status"], "active");
+    assert_eq!(claim["branch"], "rumb/RUMB-0001-mcp-claim-run");
+    assert_eq!(
+        claim["worktree_path"],
+        ".rumb/worktrees/RUMB-0001-mcp-claim-run"
+    );
+    assert!(claim["lease_until"].as_u64().unwrap() > 0);
+    assert!(dir
+        .path()
+        .join(claim["worktree_path"].as_str().unwrap())
+        .is_dir());
+
+    let run = client.call_tool(
+        "run",
+        json!({
+            "id": "RUMB-0001",
+            "actor": "mcp-smoke",
+            "command": ["sh", "-c", "printf mcp-run-ok"],
+        }),
+    );
+    assert_eq!(run["id"], "RUN-0001");
+    assert_eq!(run["item_id"], "RUMB-0001");
+    assert_eq!(run["status"], "passed");
+    assert_eq!(run["output_path"], ".rumb/runs/RUN-0001.log");
+
+    let log_path = dir.path().join(run["output_path"].as_str().unwrap());
+    let log = std::fs::read_to_string(log_path).unwrap();
+    assert!(log.contains("command\tsh -c printf mcp-run-ok"));
+    assert!(log.contains("status\tpassed"));
+    assert!(log.contains("[stdout]\nmcp-run-ok"));
+
+    let release = client.call_tool(
+        "release",
+        json!({
+            "claim_id": claim["id"],
+            "actor": "mcp-smoke",
+        }),
+    );
+    assert_eq!(release["id"], "CLAIM-0001");
+    assert_eq!(release["status"], "released");
 }
