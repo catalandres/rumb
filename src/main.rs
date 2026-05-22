@@ -5,9 +5,9 @@ use std::process::Command as ProcessCommand;
 use clap::Parser;
 use rumb::cli::{Cli, Command, EdgeCommand, ItemCommand, McpCommand, ViewCommand};
 use rumb::{
-    install_mcp, parse_ttl, AddEdge, ClaimItem, CreateItem, DoneItem, InitOptions, Item,
-    ItemDetails, McpInstallOptions, ReleaseClaim, RenewClaim, ReviewItem, RumbProject, RunCommand,
-    UpdateItemStatus,
+    install_mcp, parse_ttl, AddEdge, ClaimItem, CreateItem, DoneItem, EditItem, InitOptions, Item,
+    ItemDetails, McpInstallOptions, Merge, MergeOutcome, Recast, ReleaseClaim, RenewClaim,
+    Reparent, ReviewItem, RumbProject, RunCommand, Unlink, UnlinkOutcome, UpdateItemStatus,
 };
 
 fn main() {
@@ -163,6 +163,81 @@ fn run() -> Result<(), rumb::RumbError> {
                 item.id, item.kind, item.status, item.title
             );
         }
+        Command::Reparent {
+            id,
+            under,
+            actor,
+            confirm,
+        } => {
+            let project = RumbProject::discover(cwd)?;
+            let item = project.reparent(Reparent {
+                item_id: id,
+                new_parent_id: under,
+                actor,
+                confirm,
+            })?;
+            println!(
+                "{}\t{}\t{}\t{}",
+                item.id,
+                item.parent_id.as_deref().unwrap_or(""),
+                item.status,
+                item.title
+            );
+        }
+        Command::Edit {
+            id,
+            title,
+            source,
+            actor,
+        } => {
+            let project = RumbProject::discover(cwd)?;
+            let item = project.edit(EditItem {
+                item_id: id,
+                title,
+                source_ref: source,
+                actor,
+            })?;
+            println!(
+                "{}\t{}\t{}\t{}",
+                item.id, item.kind, item.status, item.title
+            );
+        }
+        Command::Recast { id, kind, actor } => {
+            let project = RumbProject::discover(cwd)?;
+            let item = project.recast(Recast {
+                item_id: id,
+                kind,
+                actor,
+            })?;
+            println!(
+                "{}\t{}\t{}\t{}",
+                item.id, item.kind, item.status, item.title
+            );
+        }
+        Command::Unlink {
+            from,
+            to,
+            kind,
+            actor,
+        } => {
+            let project = RumbProject::discover(cwd)?;
+            let outcome = project.unlink(Unlink {
+                from,
+                to,
+                kind,
+                actor,
+            })?;
+            print_unlink(&outcome);
+        }
+        Command::Merge { from, into, actor } => {
+            let project = RumbProject::discover(cwd)?;
+            let outcome = project.merge(Merge {
+                from_id: from,
+                into_id: into,
+                actor,
+            })?;
+            print_merge(&outcome);
+        }
         Command::Mcp {
             command: McpCommand::Serve,
         } => {
@@ -221,6 +296,26 @@ fn print_claim(claim: &rumb::Claim) {
         "{}\t{}\t{}\t{}\t{}\t{}",
         claim.id, claim.item_id, claim.actor_id, claim.status, claim.branch, claim.worktree_path
     );
+}
+
+fn print_unlink(outcome: &UnlinkOutcome) {
+    let edge = &outcome.edge;
+    println!("unlinked\t{}\t{}\t{}", edge.from, edge.to, edge.kind);
+    for item in &outcome.newly_ready {
+        println!("ready\t{}\t{}\t{}", item.id, item.kind, item.title);
+    }
+}
+
+fn print_merge(outcome: &MergeOutcome) {
+    println!(
+        "merged\t{}\t{}\t{}",
+        outcome.from.id, outcome.into.id, outcome.from.status
+    );
+    for child in &outcome.moved_children {
+        println!("moved\t{child}\t{}", outcome.into.id);
+    }
+    let edge = &outcome.supersedes_edge;
+    println!("supersedes\t{}\t{}\t{}", edge.from, edge.to, edge.kind);
 }
 
 fn print_item_tree(items: &[Item]) {

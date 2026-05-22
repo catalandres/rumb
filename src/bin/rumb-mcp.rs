@@ -12,8 +12,9 @@ use serde_json::{json, Value};
 
 use rumb::{
     default_ttl_seconds, parse_ttl, AddEdge, Claim, ClaimItem, CreateItem, DoneItem, Edge,
-    EdgeKind, Event, InitOptions, Item, ReleaseClaim, RenewClaim, ReviewItem, RumbError,
-    RumbProject, RunCommand, RunRecord, Status, UpdateItemStatus,
+    EdgeKind, EditItem, Event, InitOptions, Item, Merge, MergeOutcome, Recast, ReleaseClaim,
+    RenewClaim, Reparent, ReviewItem, RumbError, RumbProject, RunCommand, RunRecord, Status,
+    Unlink, UnlinkOutcome, UpdateItemStatus,
 };
 
 #[derive(Debug, Parser)]
@@ -231,6 +232,90 @@ impl RumbMcp {
         Ok(structured(item_json(&item)))
     }
 
+    #[tool(description = "Move a rumb item under a new parent")]
+    async fn reparent(
+        &self,
+        Parameters(args): Parameters<ReparentArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let project = self.project()?;
+        let item = project
+            .reparent(Reparent {
+                item_id: args.id,
+                new_parent_id: args.under,
+                actor: args.actor,
+                confirm: args.confirm.unwrap_or(false),
+            })
+            .map_err(to_mcp_error)?;
+        Ok(structured(item_json(&item)))
+    }
+
+    #[tool(description = "Edit a rumb item's title and/or source reference")]
+    async fn edit(
+        &self,
+        Parameters(args): Parameters<EditArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let project = self.project()?;
+        let item = project
+            .edit(EditItem {
+                item_id: args.id,
+                title: args.title,
+                source_ref: args.source,
+                actor: args.actor,
+            })
+            .map_err(to_mcp_error)?;
+        Ok(structured(item_json(&item)))
+    }
+
+    #[tool(description = "Change a rumb item's kind")]
+    async fn recast(
+        &self,
+        Parameters(args): Parameters<RecastArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let project = self.project()?;
+        let item = project
+            .recast(Recast {
+                item_id: args.id,
+                kind: args.kind,
+                actor: args.actor,
+            })
+            .map_err(to_mcp_error)?;
+        Ok(structured(item_json(&item)))
+    }
+
+    #[tool(description = "Remove a rumb graph edge, surfacing any newly ready items")]
+    async fn unlink(
+        &self,
+        Parameters(args): Parameters<UnlinkArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let kind = parse_edge_kind(&args.kind)?;
+        let project = self.project()?;
+        let outcome = project
+            .unlink(Unlink {
+                from: args.from,
+                to: args.to,
+                kind,
+                actor: args.actor,
+            })
+            .map_err(to_mcp_error)?;
+        Ok(structured(unlink_json(&outcome)))
+    }
+
+    #[tool(description = "Merge one rumb item into another, superseding the source")]
+    async fn merge(
+        &self,
+        Parameters(args): Parameters<MergeArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let project = self.project()?;
+        let outcome = project
+            .merge(Merge {
+                from_id: args.from,
+                into_id: args.into,
+                actor: args.actor,
+            })
+            .map_err(to_mcp_error)?;
+        Ok(structured(merge_json(&outcome)))
+    }
+
     #[tool(description = "List rumb events, optionally scoped to one item")]
     async fn log(
         &self,
@@ -317,6 +402,44 @@ struct LogArgs {
     id: Option<String>,
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct ReparentArgs {
+    id: String,
+    under: String,
+    actor: String,
+    confirm: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct EditArgs {
+    id: String,
+    title: Option<String>,
+    source: Option<String>,
+    actor: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct RecastArgs {
+    id: String,
+    kind: String,
+    actor: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct UnlinkArgs {
+    from: String,
+    to: String,
+    kind: String,
+    actor: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct MergeArgs {
+    from: String,
+    into: String,
+    actor: String,
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Cli::parse();
@@ -360,6 +483,22 @@ fn claim_json(claim: &Claim) -> Value {
         "branch": claim.branch,
         "worktree_path": claim.worktree_path,
         "lease_until": claim.lease_until,
+    })
+}
+
+fn unlink_json(outcome: &UnlinkOutcome) -> Value {
+    json!({
+        "edge": edge_json(&outcome.edge),
+        "newly_ready": outcome.newly_ready.iter().map(item_json).collect::<Vec<_>>(),
+    })
+}
+
+fn merge_json(outcome: &MergeOutcome) -> Value {
+    json!({
+        "from": item_json(&outcome.from),
+        "into": item_json(&outcome.into),
+        "moved_children": outcome.moved_children,
+        "supersedes_edge": edge_json(&outcome.supersedes_edge),
     })
 }
 
