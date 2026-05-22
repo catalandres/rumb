@@ -3,8 +3,8 @@ use serde_json::json;
 
 use super::model::{Edge, Item, RumbError, Status};
 use super::store::{
-    edge_row_value, insert_edge, insert_item, item_row_value, load_item, update_item_status_row,
-    with_write_retry,
+    delete_edge_row, edge_row_value, insert_edge, insert_item, item_row_value, load_item,
+    update_item_row, update_item_status_row, with_write_retry,
 };
 use super::RumbProject;
 
@@ -17,6 +17,17 @@ struct DeltaRow {
     after_json: Option<String>,
 }
 
+/// Composite primary key of an edge as JSON, shared by insert/delete deltas so
+/// the two never drift.
+fn edge_pk_json(edge: &Edge) -> String {
+    json!({
+        "from": edge.from,
+        "to": edge.to,
+        "kind": edge.kind.to_string(),
+    })
+    .to_string()
+}
+
 /// The semantic header for one changeset. `verb`/`intent_json` reproduce the
 /// pre-changeset event log's `action`/`payload_json` so the `events` view is
 /// byte-identical. `actor` stays inside `intent_json` for now (the dedicated
@@ -27,6 +38,9 @@ struct ChangesetHeader {
     object_type: String,
     object_id: String,
     intent_json: String,
+    /// Grooming changesets set this so a later `undo` can reverse them; lifecycle
+    /// changesets (claims/runs/status) stay `false`.
+    undoable: bool,
 }
 
 /// Transaction-scoped recorder: owns the write transaction, accumulates the
@@ -70,7 +84,16 @@ impl<'c> Mutation<'c> {
             object_type: object_type.to_owned(),
             object_id: object_id.to_owned(),
             intent_json,
+            undoable: false,
         });
+    }
+
+    /// Mark the current changeset as undoable. Call after `event()` for grooming
+    /// verbs (reparent/edit/recast/unlink/merge) so PR4's `undo` can reverse them.
+    pub(crate) fn mark_undoable(&mut self) {
+        if let Some(header) = self.header.as_mut() {
+            header.undoable = true;
+        }
     }
 
     pub(crate) fn insert_item(&mut self, item: &Item) -> Result<(), RumbError> {
@@ -102,18 +125,47 @@ impl<'c> Mutation<'c> {
         Ok(())
     }
 
+    /// Update every mutable column of an item (parent/kind/title/status/source),
+    /// capturing the full before/after row image. Used by the grooming verbs.
+    pub(crate) fn update_item(&mut self, item: &Item) -> Result<(), RumbError> {
+        let before = load_item(&self.tx, &item.id)?;
+        update_item_row(&self.tx, item)?;
+        let after = load_item(&self.tx, &item.id)?;
+        self.deltas.push(DeltaRow {
+            table_name: "items",
+            pk_json: json!({ "id": item.id }).to_string(),
+            before_json: before.map(|item| item_row_value(&item).to_string()),
+            after_json: after.map(|item| item_row_value(&item).to_string()),
+        });
+        Ok(())
+    }
+
     pub(crate) fn insert_edge(&mut self, edge: &Edge) -> Result<(), RumbError> {
         insert_edge(&self.tx, edge)?;
         self.deltas.push(DeltaRow {
             table_name: "edges",
-            pk_json: json!({
-                "from": edge.from,
-                "to": edge.to,
-                "kind": edge.kind.to_string(),
-            })
-            .to_string(),
+            pk_json: edge_pk_json(edge),
             before_json: None,
             after_json: Some(edge_row_value(edge).to_string()),
+        });
+        Ok(())
+    }
+
+    /// Delete an edge, capturing its row image as the `before` of the delta
+    /// (`after` is `None`). Errors if the edge does not exist.
+    pub(crate) fn delete_edge(&mut self, edge: &Edge) -> Result<(), RumbError> {
+        let deleted = delete_edge_row(&self.tx, &edge.from, &edge.to, edge.kind)?;
+        if deleted == 0 {
+            return Err(RumbError::MissingEdge(format!(
+                "{}->{} ({})",
+                edge.from, edge.to, edge.kind
+            )));
+        }
+        self.deltas.push(DeltaRow {
+            table_name: "edges",
+            pk_json: edge_pk_json(edge),
+            before_json: Some(edge_row_value(edge).to_string()),
+            after_json: None,
         });
         Ok(())
     }
@@ -140,7 +192,7 @@ impl<'c> Mutation<'c> {
             r"
             INSERT INTO changesets
                 (seq, ts, actor, verb, object_type, object_id, intent_json, undoable, kind)
-            VALUES (?, ?, NULL, ?, ?, ?, ?, false, 'event')
+            VALUES (?, ?, NULL, ?, ?, ?, ?, ?, 'event')
             ",
             params![
                 seq,
@@ -149,6 +201,7 @@ impl<'c> Mutation<'c> {
                 &header.object_type,
                 &header.object_id,
                 &header.intent_json,
+                header.undoable,
             ],
         )?;
         for (idx, delta) in self.deltas.iter().enumerate() {

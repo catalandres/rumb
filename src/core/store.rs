@@ -230,6 +230,17 @@ pub(crate) fn ensure_schema(conn: &mut Connection) -> Result<(), RumbError> {
             params![4, "changeset_timeline", timestamp() as i64],
         )?;
     }
+
+    if !applied.contains(&5) {
+        // `Status::Claimed` is gone: an active claim is now a read-time filter, not a
+        // persisted item status. Settle any rows left in the old state back to `ready`
+        // (idempotent — a re-run finds none).
+        tx.execute_batch("UPDATE items SET status = 'ready' WHERE status = 'claimed';")?;
+        tx.execute(
+            "INSERT INTO migrations (version, name, applied_at) VALUES (?, ?, ?)",
+            params![5, "drop_claimed_status", timestamp() as i64],
+        )?;
+    }
     tx.commit()?;
 
     Ok(())
@@ -343,10 +354,6 @@ pub(crate) fn load_item(conn: &Connection, id: &str) -> Result<Option<Item>, Rum
     rows.next().transpose()?.map(item_from_db).transpose()
 }
 
-pub(crate) fn item_status(conn: &Connection, id: &str) -> Result<Option<Status>, RumbError> {
-    Ok(load_item(conn, id)?.map(|item| item.status))
-}
-
 pub(crate) fn update_item_status_row(
     conn: &Connection,
     item_id: &str,
@@ -361,6 +368,35 @@ pub(crate) fn update_item_status_row(
         return Err(RumbError::MissingItem(item_id.to_owned()));
     }
     Ok(())
+}
+
+/// Persist every mutable column of `item` (keyed by `id`). Used by the grooming
+/// verbs (reparent/edit/recast/merge) where status alone is not the change.
+pub(crate) fn update_item_row(conn: &Connection, item: &Item) -> Result<(), RumbError> {
+    let changed = conn.execute(
+        r"
+        UPDATE items
+        SET parent_id = ?, kind = ?, title = ?, status = ?, source_ref = ?, updated_at = ?
+        WHERE id = ?
+        ",
+        params![
+            item.parent_id.as_deref(),
+            &item.kind,
+            &item.title,
+            item.status.to_string(),
+            item.source_ref.as_deref(),
+            item.updated_at as i64,
+            &item.id,
+        ],
+    )?;
+    if changed == 0 {
+        return Err(RumbError::MissingItem(item.id.clone()));
+    }
+    Ok(())
+}
+
+pub(crate) fn is_reserved_node(id: &str) -> bool {
+    id == ROOT_ID
 }
 
 pub(crate) fn insert_claim(conn: &Connection, claim: &Claim) -> Result<(), RumbError> {
@@ -605,27 +641,6 @@ pub(crate) fn active_claim_for_item(
     rows.next().transpose()?.map(claim_from_db).transpose()
 }
 
-pub(crate) fn has_other_active_claim(
-    conn: &Connection,
-    claim_id: &str,
-    item_id: &str,
-    now: u64,
-) -> Result<bool, RumbError> {
-    let count = conn.query_row(
-        r"
-        SELECT COUNT(*)
-        FROM claims
-        WHERE item_id = ?
-          AND id <> ?
-          AND status IN ('pending', 'active')
-          AND lease_until > ?
-        ",
-        params![item_id, claim_id, now as i64],
-        |row| row.get::<_, i64>(0),
-    )?;
-    Ok(count > 0)
-}
-
 pub(crate) fn active_claim_item_ids(
     conn: &Connection,
     now: u64,
@@ -717,6 +732,43 @@ pub(crate) fn load_items(conn: &Connection) -> Result<Vec<Item>, RumbError> {
         items.push(item_from_db(row?)?);
     }
     Ok(items)
+}
+
+pub(crate) fn load_edge(
+    conn: &Connection,
+    from: &str,
+    to: &str,
+    kind: EdgeKind,
+) -> Result<Option<Edge>, RumbError> {
+    let mut stmt = conn.prepare(
+        r"
+        SELECT from_item, to_item, kind, created_at
+        FROM edges
+        WHERE from_item = ? AND to_item = ? AND kind = ?
+        ",
+    )?;
+    let mut rows = stmt.query_map(params![from, to, kind.to_string()], |row| {
+        Ok(DbEdge {
+            from: row.get(0)?,
+            to: row.get(1)?,
+            kind: row.get(2)?,
+            created_at: row.get(3)?,
+        })
+    })?;
+    rows.next().transpose()?.map(edge_from_db).transpose()
+}
+
+pub(crate) fn delete_edge_row(
+    conn: &Connection,
+    from: &str,
+    to: &str,
+    kind: EdgeKind,
+) -> Result<usize, RumbError> {
+    let deleted = conn.execute(
+        "DELETE FROM edges WHERE from_item = ? AND to_item = ? AND kind = ?",
+        params![from, to, kind.to_string()],
+    )?;
+    Ok(deleted)
 }
 
 pub(crate) fn load_edges(conn: &Connection) -> Result<Vec<Edge>, RumbError> {

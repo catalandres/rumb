@@ -8,10 +8,11 @@ use serde_json::json;
 
 mod claims;
 mod graph;
+mod grooming;
 mod history;
 mod model;
 mod store;
-use graph::{dependencies_satisfied, item_depth};
+use graph::{compute_ready, item_depth};
 pub use model::*;
 pub use store::*;
 
@@ -172,15 +173,7 @@ impl RumbProject {
             let items = load_items(&conn)?;
             let edges = load_edges(&conn)?;
             let claimed_item_ids = active_claim_item_ids(&conn, timestamp())?;
-            let ready = items
-                .iter()
-                .filter(|item| item.id != ROOT_ID)
-                .filter(|item| !claimed_item_ids.contains(&item.id))
-                .filter(|item| matches!(item.status, Status::Ready | Status::Claimed))
-                .filter(|item| dependencies_satisfied(item, &edges, &items))
-                .cloned()
-                .collect();
-            Ok(ready)
+            Ok(compute_ready(&items, &edges, &claimed_item_ids))
         })
     }
 

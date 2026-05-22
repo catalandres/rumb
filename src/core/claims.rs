@@ -93,12 +93,6 @@ impl RumbProject {
             update_claim_status(m.conn(), &claim)?;
             update_proposal_status_for_claim(m.conn(), &claim, "released", now)?;
 
-            if item_status(m.conn(), &claim.item_id)? == Some(Status::Claimed)
-                && !has_other_active_claim(m.conn(), &claim.id, &claim.item_id, now)?
-            {
-                m.update_item_status(&claim.item_id, Status::Ready, now)?;
-            }
-
             m.event(
                 "claim.release",
                 "item",
@@ -262,7 +256,7 @@ impl RumbProject {
             if let Some(active_claim) = active_claim_for_item(m.conn(), &item.id, now)? {
                 return Err(RumbError::ClaimAlreadyActive(active_claim.id));
             }
-            if !matches!(item.status, Status::Ready | Status::Claimed) {
+            if item.status != Status::Ready {
                 return Err(RumbError::ItemNotReady(item.id));
             }
 
@@ -291,7 +285,6 @@ impl RumbProject {
                 now,
                 &self.current_ref()?,
             )?;
-            m.update_item_status(&item.id, Status::Claimed, now)?;
             m.event(
                 "claim.reserve",
                 "item",
@@ -346,9 +339,6 @@ impl RumbProject {
             claim.updated_at = now;
             update_claim_status(m.conn(), &claim)?;
             update_proposal_status(m.conn(), &reservation.proposal_id, "failed", now)?;
-            if item_status(m.conn(), &claim.item_id)? == Some(Status::Claimed) {
-                m.update_item_status(&claim.item_id, Status::Ready, now)?;
-            }
             m.event(
                 "claim.failed",
                 "item",

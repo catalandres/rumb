@@ -1170,3 +1170,491 @@ fn genesis_snapshot_written_once_and_idempotent() {
     assert!(payload.contains("\"items\""));
     assert!(payload.contains("\"edges\""));
 }
+
+// ---- PR2: grooming verbs ----
+
+fn create_item_with(project: &RumbProject, parent_id: &str, title: &str, status: Status) -> Item {
+    project
+        .create_item(CreateItem {
+            kind: "feature".to_owned(),
+            title: title.to_owned(),
+            parent_id: parent_id.to_owned(),
+            status,
+            source_ref: None,
+        })
+        .unwrap()
+}
+
+fn edge_count(conn: &Connection, from: &str, to: &str, kind: &str) -> i64 {
+    conn.query_row(
+        "SELECT COUNT(*) FROM edges WHERE from_item = ? AND to_item = ? AND kind = ?",
+        params![from, to, kind],
+        |row| row.get(0),
+    )
+    .unwrap()
+}
+
+#[test]
+fn reparent_moves_item_and_records_undoable_changeset() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = init_project(dir.path());
+    let a = create_ready_item(&project, ROOT_ID, "A");
+    let b = create_ready_item(&project, ROOT_ID, "B");
+    let child = create_ready_item(&project, &a.id, "Child");
+
+    let moved = project
+        .reparent(Reparent {
+            item_id: child.id.clone(),
+            new_parent_id: b.id.clone(),
+            actor: "operator".to_owned(),
+            confirm: false,
+        })
+        .unwrap();
+    assert_eq!(moved.parent_id.as_deref(), Some(b.id.as_str()));
+
+    let conn = Connection::open(project.state_file()).unwrap();
+    let undoable: bool = conn
+        .query_row(
+            "SELECT undoable FROM changesets WHERE object_id = ? AND verb = 'item.reparent'",
+            params![&child.id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(undoable, "grooming changesets must be undoable");
+}
+
+#[test]
+fn reparent_rejects_cycle() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = init_project(dir.path());
+    let a = create_ready_item(&project, ROOT_ID, "A");
+    let b = create_ready_item(&project, &a.id, "B");
+
+    let err = project
+        .reparent(Reparent {
+            item_id: a.id.clone(),
+            new_parent_id: b.id.clone(),
+            actor: "operator".to_owned(),
+            confirm: false,
+        })
+        .unwrap_err();
+    assert!(matches!(err, RumbError::InvalidParentChain(_)));
+}
+
+#[test]
+fn reparent_to_root_requires_confirm() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = init_project(dir.path());
+    let a = create_ready_item(&project, ROOT_ID, "A");
+    let b = create_ready_item(&project, &a.id, "B");
+
+    let err = project
+        .reparent(Reparent {
+            item_id: b.id.clone(),
+            new_parent_id: ROOT_ID.to_owned(),
+            actor: "operator".to_owned(),
+            confirm: false,
+        })
+        .unwrap_err();
+    assert!(matches!(err, RumbError::FoundationRequiresConfirm));
+
+    let moved = project
+        .reparent(Reparent {
+            item_id: b.id.clone(),
+            new_parent_id: ROOT_ID.to_owned(),
+            actor: "operator".to_owned(),
+            confirm: true,
+        })
+        .unwrap();
+    assert_eq!(moved.parent_id.as_deref(), Some(ROOT_ID));
+}
+
+#[test]
+fn reparent_rejects_reserved_node() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = init_project(dir.path());
+    let a = create_ready_item(&project, ROOT_ID, "A");
+
+    let err = project
+        .reparent(Reparent {
+            item_id: ROOT_ID.to_owned(),
+            new_parent_id: a.id,
+            actor: "operator".to_owned(),
+            confirm: true,
+        })
+        .unwrap_err();
+    assert!(matches!(err, RumbError::ReservedNode(_)));
+}
+
+#[test]
+fn reparent_blocked_by_active_claim() {
+    let dir = tempfile::tempdir().unwrap();
+    init_git_repo(dir.path());
+    let project = init_project(dir.path());
+    let foundation = create_ready_item(&project, ROOT_ID, "Foundation");
+    let other = create_ready_item(&project, ROOT_ID, "Other");
+    let child = create_ready_item(&project, &foundation.id, "Child");
+    project
+        .claim_item(ClaimItem {
+            item_id: child.id.clone(),
+            actor: "operator".to_owned(),
+            ttl_seconds: DEFAULT_TTL_SECONDS,
+            confirm_foundation: false,
+        })
+        .unwrap();
+
+    let err = project
+        .reparent(Reparent {
+            item_id: child.id.clone(),
+            new_parent_id: other.id,
+            actor: "operator".to_owned(),
+            confirm: false,
+        })
+        .unwrap_err();
+    assert!(matches!(err, RumbError::GroomingBlockedByClaim(_)));
+}
+
+#[test]
+fn edit_updates_title_and_source_and_validates() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = init_project(dir.path());
+    let item = create_ready_item(&project, ROOT_ID, "Old");
+
+    let edited = project
+        .edit(EditItem {
+            item_id: item.id.clone(),
+            title: Some("New title".to_owned()),
+            source_ref: Some("README.md#x".to_owned()),
+            actor: "operator".to_owned(),
+        })
+        .unwrap();
+    assert_eq!(edited.title, "New title");
+    assert_eq!(edited.source_ref.as_deref(), Some("README.md#x"));
+
+    assert!(matches!(
+        project
+            .edit(EditItem {
+                item_id: item.id.clone(),
+                title: None,
+                source_ref: None,
+                actor: "operator".to_owned(),
+            })
+            .unwrap_err(),
+        RumbError::NoGroomingChanges
+    ));
+    assert!(matches!(
+        project
+            .edit(EditItem {
+                item_id: item.id.clone(),
+                title: Some("   ".to_owned()),
+                source_ref: None,
+                actor: "operator".to_owned(),
+            })
+            .unwrap_err(),
+        RumbError::EmptyTitle
+    ));
+
+    // Editing the root (renaming the project) is allowed — not a reserved-node op.
+    project
+        .edit(EditItem {
+            item_id: ROOT_ID.to_owned(),
+            title: Some("Renamed".to_owned()),
+            source_ref: None,
+            actor: "operator".to_owned(),
+        })
+        .unwrap();
+}
+
+#[test]
+fn recast_changes_kind_and_guards() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = init_project(dir.path());
+    let item = create_ready_item(&project, ROOT_ID, "Task");
+
+    let recast = project
+        .recast(Recast {
+            item_id: item.id.clone(),
+            kind: "spec".to_owned(),
+            actor: "operator".to_owned(),
+        })
+        .unwrap();
+    assert_eq!(recast.kind, "spec");
+
+    assert!(matches!(
+        project
+            .recast(Recast {
+                item_id: item.id.clone(),
+                kind: "  ".to_owned(),
+                actor: "operator".to_owned(),
+            })
+            .unwrap_err(),
+        RumbError::EmptyKind
+    ));
+    assert!(matches!(
+        project
+            .recast(Recast {
+                item_id: ROOT_ID.to_owned(),
+                kind: "spec".to_owned(),
+                actor: "operator".to_owned(),
+            })
+            .unwrap_err(),
+        RumbError::ReservedNode(_)
+    ));
+}
+
+#[test]
+fn unlink_removes_edge_and_surfaces_newly_ready() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = init_project(dir.path());
+    let blocker = create_item_with(&project, ROOT_ID, "Blocker", Status::Draft);
+    let waiter = create_ready_item(&project, ROOT_ID, "Waiter");
+    project
+        .add_edge(AddEdge {
+            from: waiter.id.clone(),
+            to: blocker.id.clone(),
+            kind: EdgeKind::DependsOn,
+        })
+        .unwrap();
+
+    // Waiter is gated by an unfinished dependency, so it is not ready yet.
+    assert!(project
+        .ready_items()
+        .unwrap()
+        .iter()
+        .all(|item| item.id != waiter.id));
+
+    let outcome = project
+        .unlink(Unlink {
+            from: waiter.id.clone(),
+            to: blocker.id.clone(),
+            kind: EdgeKind::DependsOn,
+            actor: "operator".to_owned(),
+        })
+        .unwrap();
+    assert_eq!(outcome.edge.from, waiter.id);
+    assert!(outcome.newly_ready.iter().any(|item| item.id == waiter.id));
+
+    let conn = Connection::open(project.state_file()).unwrap();
+    assert_eq!(edge_count(&conn, &waiter.id, &blocker.id, "depends_on"), 0);
+
+    assert!(matches!(
+        project
+            .unlink(Unlink {
+                from: waiter.id,
+                to: blocker.id,
+                kind: EdgeKind::DependsOn,
+                actor: "operator".to_owned(),
+            })
+            .unwrap_err(),
+        RumbError::MissingEdge(_)
+    ));
+}
+
+#[test]
+fn merge_moves_children_rewires_edges_and_supersedes() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = init_project(dir.path());
+    let a = create_ready_item(&project, ROOT_ID, "A");
+    let b = create_ready_item(&project, ROOT_ID, "B");
+    let c = create_ready_item(&project, ROOT_ID, "C");
+    let d = create_ready_item(&project, ROOT_ID, "D");
+    let child = create_ready_item(&project, &a.id, "ChildOfA");
+
+    // A depends_on C, plus a pre-existing B depends_on C (forces dedup on rewire),
+    // plus D depends_on A (rewires to D depends_on B).
+    for (from, to) in [(&a.id, &c.id), (&b.id, &c.id), (&d.id, &a.id)] {
+        project
+            .add_edge(AddEdge {
+                from: from.clone(),
+                to: to.clone(),
+                kind: EdgeKind::DependsOn,
+            })
+            .unwrap();
+    }
+
+    let outcome = project
+        .merge(Merge {
+            from_id: a.id.clone(),
+            into_id: b.id.clone(),
+            actor: "operator".to_owned(),
+        })
+        .unwrap();
+    assert_eq!(outcome.from.status, Status::Superseded);
+    assert_eq!(outcome.moved_children, vec![child.id.clone()]);
+
+    let conn = Connection::open(project.state_file()).unwrap();
+    // Child reparented under B.
+    let child_parent: String = conn
+        .query_row(
+            "SELECT parent_id FROM items WHERE id = ?",
+            params![&child.id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(child_parent, b.id);
+    // A is superseded, not deleted.
+    let a_status: String = conn
+        .query_row(
+            "SELECT status FROM items WHERE id = ?",
+            params![&a.id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(a_status, "superseded");
+    // A's own edges are gone; rewired survivors and the supersedes edge are present.
+    assert_eq!(edge_count(&conn, &a.id, &c.id, "depends_on"), 0);
+    assert_eq!(edge_count(&conn, &d.id, &a.id, "depends_on"), 0);
+    assert_eq!(edge_count(&conn, &b.id, &c.id, "depends_on"), 1); // deduped, not 2
+    assert_eq!(edge_count(&conn, &d.id, &b.id, "depends_on"), 1);
+    assert_eq!(edge_count(&conn, &b.id, &a.id, "supersedes"), 1);
+}
+
+#[test]
+fn merge_rejects_self_reserved_and_cycle() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = init_project(dir.path());
+    let a = create_ready_item(&project, ROOT_ID, "A");
+    let child = create_ready_item(&project, &a.id, "Child");
+
+    assert!(matches!(
+        project
+            .merge(Merge {
+                from_id: a.id.clone(),
+                into_id: a.id.clone(),
+                actor: "operator".to_owned(),
+            })
+            .unwrap_err(),
+        RumbError::CannotMergeIntoSelf(_)
+    ));
+    assert!(matches!(
+        project
+            .merge(Merge {
+                from_id: ROOT_ID.to_owned(),
+                into_id: a.id.clone(),
+                actor: "operator".to_owned(),
+            })
+            .unwrap_err(),
+        RumbError::ReservedNode(_)
+    ));
+    // Merging A into its own descendant would create a cycle.
+    assert!(matches!(
+        project
+            .merge(Merge {
+                from_id: a.id,
+                into_id: child.id,
+                actor: "operator".to_owned(),
+            })
+            .unwrap_err(),
+        RumbError::InvalidParentChain(_)
+    ));
+}
+
+#[test]
+fn merge_blocked_by_active_claim() {
+    let dir = tempfile::tempdir().unwrap();
+    init_git_repo(dir.path());
+    let project = init_project(dir.path());
+    let foundation = create_ready_item(&project, ROOT_ID, "Foundation");
+    let into = create_ready_item(&project, ROOT_ID, "Into");
+    let child = create_ready_item(&project, &foundation.id, "Child");
+    project
+        .claim_item(ClaimItem {
+            item_id: child.id.clone(),
+            actor: "operator".to_owned(),
+            ttl_seconds: DEFAULT_TTL_SECONDS,
+            confirm_foundation: false,
+        })
+        .unwrap();
+
+    let err = project
+        .merge(Merge {
+            from_id: child.id,
+            into_id: into.id,
+            actor: "operator".to_owned(),
+        })
+        .unwrap_err();
+    assert!(matches!(err, RumbError::GroomingBlockedByClaim(_)));
+}
+
+// ---- PR2: drop Status::Claimed ----
+
+#[test]
+fn claiming_leaves_item_status_ready_with_header_only_changeset() {
+    let dir = tempfile::tempdir().unwrap();
+    init_git_repo(dir.path());
+    let project = init_project(dir.path());
+    let foundation = create_ready_item(&project, ROOT_ID, "Foundation");
+    let child = create_ready_item(&project, &foundation.id, "Child");
+    project
+        .claim_item(ClaimItem {
+            item_id: child.id.clone(),
+            actor: "operator".to_owned(),
+            ttl_seconds: DEFAULT_TTL_SECONDS,
+            confirm_foundation: false,
+        })
+        .unwrap();
+
+    let conn = Connection::open(project.state_file()).unwrap();
+    let status: String = conn
+        .query_row(
+            "SELECT status FROM items WHERE id = ?",
+            params![&child.id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(status, "ready", "claiming must not change item status");
+
+    // The claim.reserve changeset is header-only now (no item-status delta).
+    let reserve_deltas: i64 = conn
+        .query_row(
+            r"
+            SELECT COUNT(*)
+            FROM deltas d JOIN changesets c ON d.changeset_seq = c.seq
+            WHERE c.object_id = ? AND c.verb = 'claim.reserve'
+            ",
+            params![&child.id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(reserve_deltas, 0);
+
+    let undoable: bool = conn
+        .query_row(
+            "SELECT undoable FROM changesets WHERE object_id = ? AND verb = 'claim.reserve'",
+            params![&child.id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(!undoable, "lifecycle changesets stay non-undoable");
+}
+
+#[test]
+fn migration_settles_legacy_claimed_status_to_ready() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = init_project(dir.path());
+    let item = create_ready_item(&project, ROOT_ID, "Legacy");
+
+    // Simulate a database written before PR2: an item left in the old `claimed`
+    // status and migration 5 not yet applied.
+    let conn = Connection::open(project.state_file()).unwrap();
+    conn.execute(
+        "UPDATE items SET status = 'claimed' WHERE id = ?",
+        params![&item.id],
+    )
+    .unwrap();
+    conn.execute("DELETE FROM migrations WHERE version = 5", [])
+        .unwrap();
+    drop(conn);
+
+    // Any read reopens the DB, which re-runs ensure_schema (migration 5 settles
+    // the row to `ready` before it is ever parsed into `Status`).
+    let settled = project.list_items().unwrap();
+    assert_eq!(
+        settled
+            .iter()
+            .find(|candidate| candidate.id == item.id)
+            .unwrap()
+            .status,
+        Status::Ready
+    );
+}

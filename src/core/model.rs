@@ -8,7 +8,7 @@ use thiserror::Error;
 pub(crate) const STATE_DIR: &str = ".rumb";
 pub(crate) const STATE_FILE: &str = "state.duckdb";
 pub(crate) const ROOT_ID: &str = "RUMB-0000";
-pub(crate) const CURRENT_SCHEMA_VERSION: i32 = 4;
+pub(crate) const CURRENT_SCHEMA_VERSION: i32 = 5;
 pub(crate) const DEFAULT_TTL_SECONDS: u64 = 4 * 60 * 60;
 pub(crate) const STORAGE_RETRY_ATTEMPTS: usize = 5;
 
@@ -32,6 +32,8 @@ pub enum RumbError {
     InvalidItemRef(String),
     #[error("item does not exist: {0}")]
     MissingItem(String),
+    #[error("edge does not exist: {0}")]
+    MissingEdge(String),
     #[error("claim does not exist: {0}")]
     MissingClaim(String),
     #[error("item kind must not be empty")]
@@ -56,6 +58,14 @@ pub enum RumbError {
     ClaimActorMismatch { expected: String, actual: String },
     #[error("invalid parent chain at item: {0}")]
     InvalidParentChain(String),
+    #[error("reserved node cannot be groomed: {0}")]
+    ReservedNode(String),
+    #[error("item has an active claim and cannot be groomed: {0}")]
+    GroomingBlockedByClaim(String),
+    #[error("no changes provided")]
+    NoGroomingChanges,
+    #[error("cannot merge an item into itself: {0}")]
+    CannotMergeIntoSelf(String),
     #[error("git command failed: {0}")]
     GitFailed(String),
     #[error("mcp install error: {0}")]
@@ -129,6 +139,63 @@ pub struct ReviewItem {
 pub struct DoneItem {
     pub item_id: String,
     pub actor: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Reparent {
+    pub item_id: String,
+    pub new_parent_id: String,
+    pub actor: String,
+    pub confirm: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EditItem {
+    pub item_id: String,
+    pub title: Option<String>,
+    pub source_ref: Option<String>,
+    pub actor: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Recast {
+    pub item_id: String,
+    pub kind: String,
+    pub actor: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Unlink {
+    pub from: String,
+    pub to: String,
+    pub kind: EdgeKind,
+    pub actor: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Merge {
+    pub from_id: String,
+    pub into_id: String,
+    pub actor: String,
+}
+
+/// Result of `unlink`: the removed edge plus any items that became ready as a
+/// direct consequence of removing it (so callers can surface, not silently drop,
+/// a freshly-unblocked item).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UnlinkOutcome {
+    pub edge: Edge,
+    pub newly_ready: Vec<Item>,
+}
+
+/// Result of `merge`: the now-superseded source item, the destination it merged
+/// into, the children that were reparented, and the `supersedes` edge recorded.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MergeOutcome {
+    pub from: Item,
+    pub into: Item,
+    pub moved_children: Vec<String>,
+    pub supersedes_edge: Edge,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -297,7 +364,6 @@ pub enum Status {
     Draft,
     Ready,
     Blocked,
-    Claimed,
     InReview,
     Done,
     Superseded,
@@ -310,7 +376,6 @@ impl Display for Status {
             Self::Draft => "draft",
             Self::Ready => "ready",
             Self::Blocked => "blocked",
-            Self::Claimed => "claimed",
             Self::InReview => "in_review",
             Self::Done => "done",
             Self::Superseded => "superseded",
@@ -327,7 +392,6 @@ impl FromStr for Status {
             "draft" => Ok(Self::Draft),
             "ready" => Ok(Self::Ready),
             "blocked" => Ok(Self::Blocked),
-            "claimed" => Ok(Self::Claimed),
             "in_review" => Ok(Self::InReview),
             "done" => Ok(Self::Done),
             "superseded" => Ok(Self::Superseded),
