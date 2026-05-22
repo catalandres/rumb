@@ -40,10 +40,8 @@ impl RumbProject {
     }
 
     pub fn renew_claim(&self, input: RenewClaim) -> Result<Claim, RumbError> {
-        with_write_retry(|| {
-            let mut conn = self.open_database()?;
-            let tx = conn.transaction()?;
-            let mut claim = load_claim(&tx, &input.claim_id)?
+        self.mutate(|m| {
+            let mut claim = load_claim(m.conn(), &input.claim_id)?
                 .ok_or_else(|| RumbError::MissingClaim(input.claim_id.clone()))?;
             if claim.actor_id != input.actor {
                 return Err(RumbError::ClaimActorMismatch {
@@ -58,32 +56,26 @@ impl RumbProject {
 
             claim.lease_until = now + input.ttl_seconds;
             claim.updated_at = now;
-            update_claim_lease(&tx, &claim)?;
-            append_event(
-                &tx,
-                EventInput {
-                    timestamp: now,
-                    action: "claim.renew",
-                    object_type: "item",
-                    object_id: &claim.item_id,
-                    payload: json!({
-                        "claim_id": &claim.id,
-                        "actor": &input.actor,
-                        "lease_until": claim.lease_until,
-                    })
-                    .to_string(),
-                },
-            )?;
-            tx.commit()?;
+            update_claim_lease(m.conn(), &claim)?;
+            m.event(
+                "claim.renew",
+                "item",
+                &claim.item_id,
+                json!({
+                    "claim_id": &claim.id,
+                    "actor": &input.actor,
+                    "lease_until": claim.lease_until,
+                })
+                .to_string(),
+                now,
+            );
             Ok(claim)
         })
     }
 
     pub fn release_claim(&self, input: ReleaseClaim) -> Result<Claim, RumbError> {
-        with_write_retry(|| {
-            let mut conn = self.open_database()?;
-            let tx = conn.transaction()?;
-            let mut claim = load_claim(&tx, &input.claim_id)?
+        self.mutate(|m| {
+            let mut claim = load_claim(m.conn(), &input.claim_id)?
                 .ok_or_else(|| RumbError::MissingClaim(input.claim_id.clone()))?;
             if claim.actor_id != input.actor {
                 return Err(RumbError::ClaimActorMismatch {
@@ -98,30 +90,26 @@ impl RumbProject {
             let now = timestamp();
             claim.status = ClaimStatus::Released;
             claim.updated_at = now;
-            update_claim_status(&tx, &claim)?;
-            update_proposal_status_for_claim(&tx, &claim, "released", now)?;
+            update_claim_status(m.conn(), &claim)?;
+            update_proposal_status_for_claim(m.conn(), &claim, "released", now)?;
 
-            if item_status(&tx, &claim.item_id)? == Some(Status::Claimed)
-                && !has_other_active_claim(&tx, &claim.id, &claim.item_id, now)?
+            if item_status(m.conn(), &claim.item_id)? == Some(Status::Claimed)
+                && !has_other_active_claim(m.conn(), &claim.id, &claim.item_id, now)?
             {
-                update_item_status_row(&tx, &claim.item_id, Status::Ready, now)?;
+                m.update_item_status(&claim.item_id, Status::Ready, now)?;
             }
 
-            append_event(
-                &tx,
-                EventInput {
-                    timestamp: now,
-                    action: "claim.release",
-                    object_type: "item",
-                    object_id: &claim.item_id,
-                    payload: json!({
-                        "claim_id": &claim.id,
-                        "actor": &input.actor,
-                    })
-                    .to_string(),
-                },
-            )?;
-            tx.commit()?;
+            m.event(
+                "claim.release",
+                "item",
+                &claim.item_id,
+                json!({
+                    "claim_id": &claim.id,
+                    "actor": &input.actor,
+                })
+                .to_string(),
+                now,
+            );
             Ok(claim)
         })
     }
@@ -220,31 +208,25 @@ impl RumbProject {
         finished_at: u64,
         actor: &str,
     ) -> Result<RunRecord, RumbError> {
-        with_write_retry(|| {
-            let mut conn = self.open_database()?;
-            let tx = conn.transaction()?;
-            tx.execute(
+        self.mutate(|m| {
+            m.conn().execute(
                 "UPDATE runs SET status = ?, finished_at = ? WHERE id = ?",
                 params![status.to_string(), finished_at as i64, &reservation.id],
             )?;
-            append_event(
-                &tx,
-                EventInput {
-                    timestamp: finished_at,
-                    action: "run.record",
-                    object_type: "item",
-                    object_id: &reservation.item_id,
-                    payload: json!({
-                        "actor": actor,
-                        "run_id": &reservation.id,
-                        "status": status.to_string(),
-                        "output_path": &reservation.output_path,
-                        "command": &reservation.command,
-                    })
-                    .to_string(),
-                },
-            )?;
-            tx.commit()?;
+            m.event(
+                "run.record",
+                "item",
+                &reservation.item_id,
+                json!({
+                    "actor": actor,
+                    "run_id": &reservation.id,
+                    "status": status.to_string(),
+                    "output_path": &reservation.output_path,
+                    "command": &reservation.command,
+                })
+                .to_string(),
+                finished_at,
+            );
             Ok(RunRecord {
                 id: reservation.id.clone(),
                 item_id: reservation.item_id.clone(),
@@ -259,17 +241,15 @@ impl RumbProject {
     }
 
     fn reserve_claim(&self, input: &ClaimItem) -> Result<ClaimReservation, RumbError> {
-        with_write_retry(|| {
-            let mut conn = self.open_database()?;
-            let tx = conn.transaction()?;
-            let item = load_item(&tx, &input.item_id)?
+        self.mutate(|m| {
+            let item = load_item(m.conn(), &input.item_id)?
                 .ok_or_else(|| RumbError::MissingItem(input.item_id.clone()))?;
             if item.id == ROOT_ID {
                 return Err(RumbError::RootCannotClaim);
             }
 
-            let items = load_items(&tx)?;
-            let edges = load_edges(&tx)?;
+            let items = load_items(m.conn())?;
+            let edges = load_edges(m.conn())?;
             let depth = item_depth(&item.id, &items)?;
             if depth == 1 && !input.confirm_foundation {
                 return Err(RumbError::FoundationRequiresConfirm);
@@ -279,15 +259,15 @@ impl RumbProject {
             }
 
             let now = timestamp();
-            if let Some(active_claim) = active_claim_for_item(&tx, &item.id, now)? {
+            if let Some(active_claim) = active_claim_for_item(m.conn(), &item.id, now)? {
                 return Err(RumbError::ClaimAlreadyActive(active_claim.id));
             }
             if !matches!(item.status, Status::Ready | Status::Claimed) {
                 return Err(RumbError::ItemNotReady(item.id));
             }
 
-            let claim_id = next_prefixed_id(&tx, "claims", "CLAIM-", 4)?;
-            let proposal_id = next_prefixed_id(&tx, "proposals", "PROP-", 4)?;
+            let claim_id = next_prefixed_id(m.conn(), "claims", "CLAIM-", 4)?;
+            let proposal_id = next_prefixed_id(m.conn(), "proposals", "PROP-", 4)?;
             let branch = format!("rumb/{}-{}", item.id, slugify(&item.title));
             let worktree_path = format!(".rumb/worktrees/{}-{}", item.id, slugify(&item.title));
             let lease_until = now + input.ttl_seconds;
@@ -302,101 +282,85 @@ impl RumbProject {
                 created_at: now,
                 updated_at: now,
             };
-            insert_claim(&tx, &claim)?;
+            insert_claim(m.conn(), &claim)?;
             insert_proposal(
-                &tx,
+                m.conn(),
                 &proposal_id,
                 &claim,
                 "pending",
                 now,
                 &self.current_ref()?,
             )?;
-            update_item_status_row(&tx, &item.id, Status::Claimed, now)?;
-            append_event(
-                &tx,
-                EventInput {
-                    timestamp: now,
-                    action: "claim.reserve",
-                    object_type: "item",
-                    object_id: &item.id,
-                    payload: json!({
-                        "claim_id": &claim.id,
-                        "actor": &input.actor,
-                        "branch": &claim.branch,
-                        "worktree_path": &claim.worktree_path,
-                        "lease_until": claim.lease_until,
-                    })
-                    .to_string(),
-                },
-            )?;
-            tx.commit()?;
+            m.update_item_status(&item.id, Status::Claimed, now)?;
+            m.event(
+                "claim.reserve",
+                "item",
+                &item.id,
+                json!({
+                    "claim_id": &claim.id,
+                    "actor": &input.actor,
+                    "branch": &claim.branch,
+                    "worktree_path": &claim.worktree_path,
+                    "lease_until": claim.lease_until,
+                })
+                .to_string(),
+                now,
+            );
             Ok(ClaimReservation { claim, proposal_id })
         })
     }
 
     fn activate_claim(&self, reservation: &ClaimReservation) -> Result<Claim, RumbError> {
-        with_write_retry(|| {
-            let mut conn = self.open_database()?;
-            let tx = conn.transaction()?;
-            let mut claim = load_claim(&tx, &reservation.claim.id)?
+        self.mutate(|m| {
+            let mut claim = load_claim(m.conn(), &reservation.claim.id)?
                 .ok_or_else(|| RumbError::MissingClaim(reservation.claim.id.clone()))?;
             let now = timestamp();
             claim.status = ClaimStatus::Active;
             claim.updated_at = now;
-            update_claim_status(&tx, &claim)?;
-            update_proposal_status(&tx, &reservation.proposal_id, "open", now)?;
-            append_event(
-                &tx,
-                EventInput {
-                    timestamp: now,
-                    action: "claim.create",
-                    object_type: "item",
-                    object_id: &claim.item_id,
-                    payload: json!({
-                        "claim_id": &claim.id,
-                        "actor": &claim.actor_id,
-                        "branch": &claim.branch,
-                        "worktree_path": &claim.worktree_path,
-                        "lease_until": claim.lease_until,
-                    })
-                    .to_string(),
-                },
-            )?;
-            tx.commit()?;
+            update_claim_status(m.conn(), &claim)?;
+            update_proposal_status(m.conn(), &reservation.proposal_id, "open", now)?;
+            m.event(
+                "claim.create",
+                "item",
+                &claim.item_id,
+                json!({
+                    "claim_id": &claim.id,
+                    "actor": &claim.actor_id,
+                    "branch": &claim.branch,
+                    "worktree_path": &claim.worktree_path,
+                    "lease_until": claim.lease_until,
+                })
+                .to_string(),
+                now,
+            );
             Ok(claim)
         })
     }
 
     fn fail_claim(&self, reservation: &ClaimReservation, reason: &str) -> Result<(), RumbError> {
-        with_write_retry(|| {
-            let mut conn = self.open_database()?;
-            let tx = conn.transaction()?;
-            let mut claim = load_claim(&tx, &reservation.claim.id)?
+        self.mutate(|m| {
+            let mut claim = load_claim(m.conn(), &reservation.claim.id)?
                 .ok_or_else(|| RumbError::MissingClaim(reservation.claim.id.clone()))?;
             let now = timestamp();
             claim.status = ClaimStatus::Failed;
             claim.updated_at = now;
-            update_claim_status(&tx, &claim)?;
-            update_proposal_status(&tx, &reservation.proposal_id, "failed", now)?;
-            if item_status(&tx, &claim.item_id)? == Some(Status::Claimed) {
-                update_item_status_row(&tx, &claim.item_id, Status::Ready, now)?;
+            update_claim_status(m.conn(), &claim)?;
+            update_proposal_status(m.conn(), &reservation.proposal_id, "failed", now)?;
+            if item_status(m.conn(), &claim.item_id)? == Some(Status::Claimed) {
+                m.update_item_status(&claim.item_id, Status::Ready, now)?;
             }
-            append_event(
-                &tx,
-                EventInput {
-                    timestamp: now,
-                    action: "claim.failed",
-                    object_type: "item",
-                    object_id: &claim.item_id,
-                    payload: json!({
-                        "claim_id": &claim.id,
-                        "actor": &claim.actor_id,
-                        "reason": reason,
-                    })
-                    .to_string(),
-                },
-            )?;
-            tx.commit()?;
+            m.event(
+                "claim.failed",
+                "item",
+                &claim.item_id,
+                json!({
+                    "claim_id": &claim.id,
+                    "actor": &claim.actor_id,
+                    "reason": reason,
+                })
+                .to_string(),
+                now,
+            );
             Ok(())
         })
     }

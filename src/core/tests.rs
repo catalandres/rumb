@@ -982,3 +982,191 @@ fn existing_text_bootstrap_file_returns_storage_error() {
         .unwrap_err();
     assert!(matches!(err, RumbError::Storage(_)));
 }
+
+// ---- PR1: changeset change-log substrate ----
+
+#[test]
+fn create_item_records_changeset_and_delta() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = init_project(dir.path());
+    let item = create_ready_item(&project, ROOT_ID, "Thing");
+
+    let conn = Connection::open(project.state_file()).unwrap();
+    let verb: String = conn
+        .query_row(
+            "SELECT verb FROM changesets WHERE object_id = ? AND verb = 'item.create'",
+            params![&item.id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(verb, "item.create");
+
+    let (table, before, after): (String, Option<String>, Option<String>) = conn
+        .query_row(
+            r"
+            SELECT d.table_name, d.before_json, d.after_json
+            FROM deltas d JOIN changesets c ON d.changeset_seq = c.seq
+            WHERE c.object_id = ? AND c.verb = 'item.create'
+            ",
+            params![&item.id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(table, "items");
+    assert!(before.is_none(), "insert has no before image");
+    assert!(after.unwrap().contains(&item.id));
+}
+
+#[test]
+fn update_status_delta_has_before_and_after() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = init_project(dir.path());
+    let item = create_ready_item(&project, ROOT_ID, "Thing");
+    project
+        .update_item_status(UpdateItemStatus {
+            item_id: item.id.clone(),
+            status: Status::Done,
+            actor: "op".to_owned(),
+        })
+        .unwrap();
+
+    let conn = Connection::open(project.state_file()).unwrap();
+    let (before, after): (String, String) = conn
+        .query_row(
+            r"
+            SELECT d.before_json, d.after_json
+            FROM deltas d JOIN changesets c ON d.changeset_seq = c.seq
+            WHERE c.object_id = ? AND c.verb = 'item.status'
+            ",
+            params![&item.id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert!(before.contains("\"status\":\"ready\""));
+    assert!(after.contains("\"status\":\"done\""));
+}
+
+#[test]
+fn edge_delta_uses_composite_pk() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = init_project(dir.path());
+    let a = create_ready_item(&project, ROOT_ID, "A");
+    let b = create_ready_item(&project, ROOT_ID, "B");
+    project
+        .add_edge(AddEdge {
+            from: a.id.clone(),
+            to: b.id.clone(),
+            kind: EdgeKind::DependsOn,
+        })
+        .unwrap();
+
+    let conn = Connection::open(project.state_file()).unwrap();
+    let pk: String = conn
+        .query_row(
+            r"
+            SELECT d.pk_json
+            FROM deltas d JOIN changesets c ON d.changeset_seq = c.seq
+            WHERE c.verb = 'edge.add'
+            ",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(pk.contains("\"from\""));
+    assert!(pk.contains("\"to\""));
+    assert!(pk.contains("\"kind\""));
+}
+
+#[test]
+fn failed_mutation_records_no_changeset() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = init_project(dir.path());
+    let conn = Connection::open(project.state_file()).unwrap();
+    let before: i64 = conn
+        .query_row("SELECT COUNT(*) FROM changesets", [], |row| row.get(0))
+        .unwrap();
+
+    let result = project.create_item(CreateItem {
+        kind: "feature".to_owned(),
+        title: "orphan".to_owned(),
+        parent_id: "RUMB-9999".to_owned(),
+        status: Status::Ready,
+        source_ref: None,
+    });
+    assert!(result.is_err());
+
+    let after: i64 = conn
+        .query_row("SELECT COUNT(*) FROM changesets", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(before, after, "failed op must roll back its changeset");
+}
+
+#[test]
+fn events_view_projects_changesets() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = init_project(dir.path());
+    create_ready_item(&project, ROOT_ID, "Thing");
+
+    let events = project.events(None).unwrap();
+    let conn = Connection::open(project.state_file()).unwrap();
+    let changeset_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM changesets", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(events.len() as i64, changeset_count);
+    assert!(events.iter().any(|event| event.action == "init"));
+    assert!(events.iter().any(|event| event.action == "item.create"));
+}
+
+#[test]
+fn changeset_seqs_are_unique_and_increasing() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = init_project(dir.path());
+    create_ready_item(&project, ROOT_ID, "A");
+    create_ready_item(&project, ROOT_ID, "B");
+
+    let conn = Connection::open(project.state_file()).unwrap();
+    let mut stmt = conn
+        .prepare("SELECT seq FROM changesets ORDER BY seq")
+        .unwrap();
+    let seqs: Vec<i64> = stmt
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .map(|row| row.unwrap())
+        .collect();
+    assert!(seqs.len() >= 3, "init + two creates");
+    assert!(seqs.windows(2).all(|pair| pair[0] < pair[1]));
+}
+
+#[test]
+fn genesis_snapshot_written_once_and_idempotent() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = init_project(dir.path());
+    // Re-open the database a few times; ensure_schema must not re-run migration 4.
+    let _ = project.list_items().unwrap();
+    let _ = project.list_items().unwrap();
+
+    let conn = Connection::open(project.state_file()).unwrap();
+    let snapshots: i64 = conn
+        .query_row("SELECT COUNT(*) FROM snapshots", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(snapshots, 1);
+    let migration_4: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM migrations WHERE version = 4",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(migration_4, 1);
+
+    let (format_version, payload): (i64, String) = conn
+        .query_row(
+            "SELECT format_version, payload_json FROM snapshots",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(format_version, 1);
+    assert!(payload.contains("\"items\""));
+    assert!(payload.contains("\"edges\""));
+}

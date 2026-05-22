@@ -6,6 +6,7 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use duckdb::{params, Connection};
+use serde_json::json;
 
 use super::model::*;
 
@@ -169,9 +170,96 @@ pub(crate) fn ensure_schema(conn: &mut Connection) -> Result<(), RumbError> {
             params![3, "run_lifecycle_state", timestamp() as i64],
         )?;
     }
+
+    if !applied.contains(&4) {
+        tx.execute_batch(
+            r"
+            CREATE TABLE IF NOT EXISTS changesets (
+                seq BIGINT PRIMARY KEY,
+                ts BIGINT NOT NULL,
+                actor TEXT,
+                verb TEXT NOT NULL,
+                object_type TEXT NOT NULL,
+                object_id TEXT NOT NULL,
+                intent_json TEXT NOT NULL,
+                undoable BOOLEAN NOT NULL,
+                kind TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS deltas (
+                changeset_seq BIGINT NOT NULL,
+                delta_idx INTEGER NOT NULL,
+                table_name TEXT NOT NULL,
+                pk_json TEXT NOT NULL,
+                before_json TEXT,
+                after_json TEXT,
+                PRIMARY KEY (changeset_seq, delta_idx)
+            );
+
+            CREATE TABLE IF NOT EXISTS snapshots (
+                seq BIGINT PRIMARY KEY,
+                format_version INTEGER NOT NULL,
+                payload_json TEXT NOT NULL
+            );
+
+            INSERT INTO changesets
+                (seq, ts, actor, verb, object_type, object_id, intent_json, undoable, kind)
+            SELECT seq, timestamp, NULL, action, object_type, object_id, payload_json, false, 'legacy'
+            FROM events;
+
+            DROP TABLE events;
+
+            CREATE VIEW events AS
+            SELECT seq, ts AS timestamp, verb AS action, object_type, object_id,
+                   intent_json AS payload_json
+            FROM changesets;
+            ",
+        )?;
+        let snapshot = snapshot_json(&tx)?;
+        let genesis_seq: i64 =
+            tx.query_row("SELECT COALESCE(MAX(seq), 0) FROM changesets", [], |row| {
+                row.get(0)
+            })?;
+        tx.execute(
+            "INSERT INTO snapshots (seq, format_version, payload_json) VALUES (?, ?, ?)",
+            params![genesis_seq, 1, snapshot],
+        )?;
+        tx.execute(
+            "INSERT INTO migrations (version, name, applied_at) VALUES (?, ?, ?)",
+            params![4, "changeset_timeline", timestamp() as i64],
+        )?;
+    }
     tx.commit()?;
 
     Ok(())
+}
+
+pub(crate) fn item_row_value(item: &Item) -> serde_json::Value {
+    json!({
+        "id": item.id,
+        "parent_id": item.parent_id,
+        "kind": item.kind,
+        "title": item.title,
+        "status": item.status.to_string(),
+        "source_ref": item.source_ref,
+        "created_at": item.created_at,
+        "updated_at": item.updated_at,
+    })
+}
+
+pub(crate) fn edge_row_value(edge: &Edge) -> serde_json::Value {
+    json!({
+        "from": edge.from,
+        "to": edge.to,
+        "kind": edge.kind.to_string(),
+        "created_at": edge.created_at,
+    })
+}
+
+pub(crate) fn snapshot_json(conn: &Connection) -> Result<String, RumbError> {
+    let items: Vec<serde_json::Value> = load_items(conn)?.iter().map(item_row_value).collect();
+    let edges: Vec<serde_json::Value> = load_edges(conn)?.iter().map(edge_row_value).collect();
+    Ok(json!({ "items": items, "edges": edges }).to_string())
 }
 
 pub(crate) fn applied_migrations(conn: &Connection) -> Result<HashSet<i32>, RumbError> {
@@ -580,35 +668,6 @@ pub(crate) fn next_prefixed_id(
     }
     let next = max_id + 1;
     Ok(format!("{prefix}{next:0width$}"))
-}
-
-pub(crate) struct EventInput<'a> {
-    pub(crate) timestamp: u64,
-    pub(crate) action: &'a str,
-    pub(crate) object_type: &'a str,
-    pub(crate) object_id: &'a str,
-    pub(crate) payload: String,
-}
-
-pub(crate) fn append_event(conn: &Connection, event: EventInput<'_>) -> Result<(), RumbError> {
-    let seq = conn.query_row("SELECT COALESCE(MAX(seq), 0) + 1 FROM events", [], |row| {
-        row.get::<_, i64>(0)
-    })?;
-    conn.execute(
-        r"
-        INSERT INTO events (seq, timestamp, action, object_type, object_id, payload_json)
-        VALUES (?, ?, ?, ?, ?, ?)
-        ",
-        params![
-            seq,
-            event.timestamp as i64,
-            event.action,
-            event.object_type,
-            event.object_id,
-            event.payload,
-        ],
-    )?;
-    Ok(())
 }
 
 pub(crate) fn next_item_id(conn: &Connection) -> Result<String, RumbError> {

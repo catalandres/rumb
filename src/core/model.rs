@@ -8,7 +8,7 @@ use thiserror::Error;
 pub(crate) const STATE_DIR: &str = ".rumb";
 pub(crate) const STATE_FILE: &str = "state.duckdb";
 pub(crate) const ROOT_ID: &str = "RUMB-0000";
-pub(crate) const CURRENT_SCHEMA_VERSION: i32 = 3;
+pub(crate) const CURRENT_SCHEMA_VERSION: i32 = 4;
 pub(crate) const DEFAULT_TTL_SECONDS: u64 = 4 * 60 * 60;
 pub(crate) const STORAGE_RETRY_ATTEMPTS: usize = 5;
 

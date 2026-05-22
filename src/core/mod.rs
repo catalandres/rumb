@@ -8,6 +8,7 @@ use serde_json::json;
 
 mod claims;
 mod graph;
+mod history;
 mod model;
 mod store;
 use graph::{dependencies_satisfied, item_depth};
@@ -51,10 +52,8 @@ impl RumbProject {
     pub fn init(&self, options: &InitOptions) -> Result<(), RumbError> {
         fs::create_dir_all(self.state_dir())?;
 
-        with_write_retry(|| {
-            let mut conn = self.open_database()?;
-            let tx = conn.transaction()?;
-            if !item_exists(&tx, ROOT_ID)? {
+        self.mutate(|m| {
+            if !item_exists(m.conn(), ROOT_ID)? {
                 let now = timestamp();
                 let root = Item {
                     id: ROOT_ID.to_owned(),
@@ -66,19 +65,15 @@ impl RumbProject {
                     created_at: now,
                     updated_at: now,
                 };
-                insert_item(&tx, &root)?;
-                append_event(
-                    &tx,
-                    EventInput {
-                        timestamp: now,
-                        action: "init",
-                        object_type: "project",
-                        object_id: ROOT_ID,
-                        payload: json!({ "name": &options.name }).to_string(),
-                    },
-                )?;
+                m.insert_item(&root)?;
+                m.event(
+                    "init",
+                    "project",
+                    ROOT_ID,
+                    json!({ "name": &options.name }).to_string(),
+                    now,
+                );
             }
-            tx.commit()?;
             Ok(())
         })?;
 
@@ -102,16 +97,14 @@ impl RumbProject {
             return Err(RumbError::EmptyTitle);
         }
 
-        with_write_retry(|| {
-            let mut conn = self.open_database()?;
-            let tx = conn.transaction()?;
-            if !item_exists(&tx, &input.parent_id)? {
+        self.mutate(|m| {
+            if !item_exists(m.conn(), &input.parent_id)? {
                 return Err(RumbError::MissingItem(input.parent_id.clone()));
             }
 
             let now = timestamp();
             let item = Item {
-                id: next_item_id(&tx)?,
+                id: next_item_id(m.conn())?,
                 parent_id: Some(input.parent_id.clone()),
                 kind: input.kind.clone(),
                 title: input.title.clone(),
@@ -120,37 +113,31 @@ impl RumbProject {
                 created_at: now,
                 updated_at: now,
             };
-            insert_item(&tx, &item)?;
-            append_event(
-                &tx,
-                EventInput {
-                    timestamp: now,
-                    action: "item.create",
-                    object_type: "item",
-                    object_id: &item.id,
-                    payload: json!({
-                        "kind": &item.kind,
-                        "status": item.status.to_string(),
-                        "parent_id": item.parent_id.as_deref(),
-                        "source_ref": item.source_ref.as_deref(),
-                    })
-                    .to_string(),
-                },
-            )?;
-            tx.commit()?;
+            m.insert_item(&item)?;
+            m.event(
+                "item.create",
+                "item",
+                &item.id,
+                json!({
+                    "kind": &item.kind,
+                    "status": item.status.to_string(),
+                    "parent_id": item.parent_id.as_deref(),
+                    "source_ref": item.source_ref.as_deref(),
+                })
+                .to_string(),
+                now,
+            );
 
             Ok(item)
         })
     }
 
     pub fn add_edge(&self, input: AddEdge) -> Result<Edge, RumbError> {
-        with_write_retry(|| {
-            let mut conn = self.open_database()?;
-            let tx = conn.transaction()?;
-            if !item_exists(&tx, &input.from)? {
+        self.mutate(|m| {
+            if !item_exists(m.conn(), &input.from)? {
                 return Err(RumbError::MissingItem(input.from.clone()));
             }
-            if !item_exists(&tx, &input.to)? {
+            if !item_exists(m.conn(), &input.to)? {
                 return Err(RumbError::MissingItem(input.to.clone()));
             }
 
@@ -161,23 +148,19 @@ impl RumbProject {
                 kind: input.kind,
                 created_at: now,
             };
-            insert_edge(&tx, &edge)?;
-            append_event(
-                &tx,
-                EventInput {
-                    timestamp: now,
-                    action: "edge.add",
-                    object_type: "edge",
-                    object_id: &format!("{}->{}", edge.from, edge.to),
-                    payload: json!({
-                        "from": &edge.from,
-                        "to": &edge.to,
-                        "kind": edge.kind.to_string(),
-                    })
-                    .to_string(),
-                },
-            )?;
-            tx.commit()?;
+            m.insert_edge(&edge)?;
+            m.event(
+                "edge.add",
+                "edge",
+                &format!("{}->{}", edge.from, edge.to),
+                json!({
+                    "from": &edge.from,
+                    "to": &edge.to,
+                    "kind": edge.kind.to_string(),
+                })
+                .to_string(),
+                now,
+            );
 
             Ok(edge)
         })
@@ -255,30 +238,24 @@ impl RumbProject {
     }
 
     pub fn update_item_status(&self, input: UpdateItemStatus) -> Result<Item, RumbError> {
-        with_write_retry(|| {
-            let mut conn = self.open_database()?;
-            let tx = conn.transaction()?;
-            let mut item = load_item(&tx, &input.item_id)?
+        self.mutate(|m| {
+            let mut item = load_item(m.conn(), &input.item_id)?
                 .ok_or_else(|| RumbError::MissingItem(input.item_id.clone()))?;
             let now = timestamp();
             item.status = input.status;
             item.updated_at = now;
-            update_item_status_row(&tx, &item.id, item.status, now)?;
-            append_event(
-                &tx,
-                EventInput {
-                    timestamp: now,
-                    action: "item.status",
-                    object_type: "item",
-                    object_id: &item.id,
-                    payload: json!({
-                        "actor": &input.actor,
-                        "status": item.status.to_string(),
-                    })
-                    .to_string(),
-                },
-            )?;
-            tx.commit()?;
+            m.update_item_status(&item.id, item.status, now)?;
+            m.event(
+                "item.status",
+                "item",
+                &item.id,
+                json!({
+                    "actor": &input.actor,
+                    "status": item.status.to_string(),
+                })
+                .to_string(),
+                now,
+            );
             Ok(item)
         })
     }
@@ -303,30 +280,24 @@ impl RumbProject {
         actor: &str,
         action: &'static str,
     ) -> Result<Item, RumbError> {
-        with_write_retry(|| {
-            let mut conn = self.open_database()?;
-            let tx = conn.transaction()?;
-            let mut item = load_item(&tx, item_id)?
+        self.mutate(|m| {
+            let mut item = load_item(m.conn(), item_id)?
                 .ok_or_else(|| RumbError::MissingItem(item_id.to_owned()))?;
             let now = timestamp();
             item.status = status;
             item.updated_at = now;
-            update_item_status_row(&tx, &item.id, item.status, now)?;
-            append_event(
-                &tx,
-                EventInput {
-                    timestamp: now,
-                    action,
-                    object_type: "item",
-                    object_id: &item.id,
-                    payload: json!({
-                        "actor": actor,
-                        "status": item.status.to_string(),
-                    })
-                    .to_string(),
-                },
-            )?;
-            tx.commit()?;
+            m.update_item_status(&item.id, item.status, now)?;
+            m.event(
+                action,
+                "item",
+                &item.id,
+                json!({
+                    "actor": actor,
+                    "status": item.status.to_string(),
+                })
+                .to_string(),
+                now,
+            );
             Ok(item)
         })
     }
