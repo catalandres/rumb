@@ -34,7 +34,21 @@ Cross-links (edges) do not affect depth; only the parent chain does.
 
 `kind` is any non-empty string. The conventional set is `principle`, `adr`,
 `spec`, `feature`, `task`, `bug`, `test`, and `chore`, but rumb does not enforce
-this list.
+this list. Two kinds are used structurally: `project` (the root) and `inbox` (the
+capture inbox). Captured notes get kind `note`.
+
+### Tier
+
+Every item has a `tier` — a work-weight signal that is a property of the work
+itself, not a model name: `routine`, `standard` (the default), or `hard`. Set it
+at `item create` or via `edit`. Tier is displayed in `ready` and `view`; it does
+not gate readiness or claiming today (tier-aware dispatch is a later cycle).
+
+### Body
+
+`body` is optional free text holding the full content of a captured note (see
+[Capture](#capture)). Most items leave it empty; the one-line `title` is the
+summary.
 
 ## Status lifecycle
 
@@ -119,8 +133,24 @@ an item is created; each is recorded as an undoable changeset.
   `from` is never deleted, so its claims, proposals, and runs stay valid history.
   Blocked while `from` has an active claim.
 
-The project root cannot be reparented, recast, or merged away; `reparent` and
-`merge` refuse it. Editing the root (renaming the project) is allowed.
+The project root and the inbox are **reserved nodes**: they cannot be reparented,
+recast, or merged away, and they never appear in `ready`. Editing the root
+(renaming the project) is allowed.
+
+## Inbox and capture
+
+Every project has an **inbox**: a normal item with kind `inbox`, seeded as a
+direct child of the root. It is a regular numeric `RUMB-NNNN` item (so it resolves
+through the usual reference forms), found internally by an `inbox_id` entry in the
+`meta` table rather than a hardcoded id. The inbox is created at `init`, and an
+existing repo that predates the inbox gets one via a schema migration.
+
+`rumb capture "<text>"` drops a thought into the inbox with no "what kind of thing
+is this?" freeze: it creates a `note` with status `draft` and tier `standard`. The
+full text is stored in `body`; the `title` is a clean one-line summary (whitespace
+collapsed, truncated). Because captures are `draft`, they never show up in `ready`
+until you groom them — reparent them out of the inbox, `recast` them into a real
+kind, or `edit` them. That is the capture-then-groom loop.
 
 ## Actors
 
@@ -198,6 +228,7 @@ init          item.create   item.status   edge.add
 claim.reserve claim.create  claim.failed  claim.renew  claim.release
 run.record    item.review   item.done
 item.reparent item.edit     item.recast   item.merge   edge.unlink
+item.capture
 ```
 
 Grooming events (`item.reparent`, `item.edit`, `item.recast`, `item.merge`, and
