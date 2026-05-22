@@ -157,6 +157,11 @@ fn mcp_server_initializes_and_lists_rumb_tools() {
         "run",
         "review",
         "done",
+        "reparent",
+        "edit",
+        "recast",
+        "unlink",
+        "merge",
         "log",
     ] {
         assert!(names.contains(&expected), "missing tool {expected}");
@@ -205,6 +210,59 @@ fn mcp_tools_create_ready_and_log_structured_repo_state() {
     assert_eq!(events[0]["object_id"], "RUMB-0001");
     assert_eq!(events[0]["payload"]["kind"], "feature");
     assert_eq!(events[0]["payload"]["status"], "ready");
+}
+
+#[test]
+fn mcp_grooming_verbs_reshape_the_graph() {
+    let dir = tempfile::tempdir().unwrap();
+    init_git_repo(dir.path());
+    let mut client = McpClient::start(dir.path());
+    client.initialize();
+
+    client.call_tool("init", json!({ "name": "rumb" }));
+    for title in ["A", "B", "Child"] {
+        client.call_tool(
+            "item_create",
+            json!({ "kind": "feature", "title": title, "parent": "RUMB-0000", "status": "ready" }),
+        );
+    }
+    // A = RUMB-0001, B = RUMB-0002, Child = RUMB-0003.
+
+    let recast = client.call_tool(
+        "recast",
+        json!({ "id": "RUMB-0001", "kind": "spec", "actor": "mcp-smoke" }),
+    );
+    assert_eq!(recast["kind"], "spec");
+
+    let edit = client.call_tool(
+        "edit",
+        json!({ "id": "RUMB-0001", "title": "A renamed", "actor": "mcp-smoke" }),
+    );
+    assert_eq!(edit["title"], "A renamed");
+
+    let reparent = client.call_tool(
+        "reparent",
+        json!({ "id": "RUMB-0003", "under": "RUMB-0002", "actor": "mcp-smoke" }),
+    );
+    assert_eq!(reparent["parent_id"], "RUMB-0002");
+
+    client.call_tool(
+        "edge_add",
+        json!({ "from": "RUMB-0002", "to": "RUMB-0001", "kind": "depends_on" }),
+    );
+    let unlink = client.call_tool(
+        "unlink",
+        json!({ "from": "RUMB-0002", "to": "RUMB-0001", "kind": "depends_on", "actor": "mcp-smoke" }),
+    );
+    assert_eq!(unlink["edge"]["from"], "RUMB-0002");
+
+    let merge = client.call_tool(
+        "merge",
+        json!({ "from": "RUMB-0001", "into": "RUMB-0002", "actor": "mcp-smoke" }),
+    );
+    assert_eq!(merge["from"]["status"], "superseded");
+    assert_eq!(merge["supersedes_edge"]["from"], "RUMB-0002");
+    assert_eq!(merge["supersedes_edge"]["to"], "RUMB-0001");
 }
 
 #[test]

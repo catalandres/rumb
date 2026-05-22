@@ -70,6 +70,46 @@ pub enum Command {
         #[arg(long)]
         actor: String,
     },
+    Reparent {
+        id: String,
+        #[arg(long)]
+        under: String,
+        #[arg(long)]
+        actor: String,
+        #[arg(long)]
+        confirm: bool,
+    },
+    Edit {
+        id: String,
+        #[arg(long)]
+        title: Option<String>,
+        #[arg(long)]
+        source: Option<String>,
+        #[arg(long)]
+        actor: String,
+    },
+    Recast {
+        id: String,
+        #[arg(long)]
+        kind: String,
+        #[arg(long)]
+        actor: String,
+    },
+    Unlink {
+        from: String,
+        to: String,
+        #[arg(long)]
+        kind: EdgeKind,
+        #[arg(long)]
+        actor: String,
+    },
+    Merge {
+        from: String,
+        #[arg(long)]
+        into: String,
+        #[arg(long)]
+        actor: String,
+    },
     Mcp {
         #[command(subcommand)]
         command: McpCommand,
@@ -280,6 +320,136 @@ mod tests {
         match cli.command {
             Command::Done { id, actor } => {
                 assert_eq!(id, "RUMB-0001");
+                assert_eq!(actor, "operator");
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_reparent_with_confirm() {
+        let cli = Cli::parse_from([
+            "rumb",
+            "reparent",
+            "RUMB-0002",
+            "--under",
+            "RUMB-0000",
+            "--actor",
+            "operator",
+            "--confirm",
+        ]);
+
+        match cli.command {
+            Command::Reparent {
+                id,
+                under,
+                actor,
+                confirm,
+            } => {
+                assert_eq!(id, "RUMB-0002");
+                assert_eq!(under, "RUMB-0000");
+                assert_eq!(actor, "operator");
+                assert!(confirm);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_edit_optional_fields() {
+        let cli = Cli::parse_from([
+            "rumb",
+            "edit",
+            "RUMB-0002",
+            "--title",
+            "New title",
+            "--actor",
+            "operator",
+        ]);
+
+        match cli.command {
+            Command::Edit {
+                id,
+                title,
+                source,
+                actor,
+            } => {
+                assert_eq!(id, "RUMB-0002");
+                assert_eq!(title.as_deref(), Some("New title"));
+                assert_eq!(source, None);
+                assert_eq!(actor, "operator");
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_recast() {
+        let cli = Cli::parse_from([
+            "rumb",
+            "recast",
+            "RUMB-0002",
+            "--kind",
+            "spec",
+            "--actor",
+            "operator",
+        ]);
+
+        match cli.command {
+            Command::Recast { id, kind, actor } => {
+                assert_eq!(id, "RUMB-0002");
+                assert_eq!(kind, "spec");
+                assert_eq!(actor, "operator");
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_unlink_edge_kind() {
+        let cli = Cli::parse_from([
+            "rumb",
+            "unlink",
+            "RUMB-0001",
+            "RUMB-0002",
+            "--kind",
+            "depends_on",
+            "--actor",
+            "operator",
+        ]);
+
+        match cli.command {
+            Command::Unlink {
+                from,
+                to,
+                kind,
+                actor,
+            } => {
+                assert_eq!(from, "RUMB-0001");
+                assert_eq!(to, "RUMB-0002");
+                assert_eq!(kind, EdgeKind::DependsOn);
+                assert_eq!(actor, "operator");
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_merge() {
+        let cli = Cli::parse_from([
+            "rumb",
+            "merge",
+            "RUMB-0003",
+            "--into",
+            "RUMB-0002",
+            "--actor",
+            "operator",
+        ]);
+
+        match cli.command {
+            Command::Merge { from, into, actor } => {
+                assert_eq!(from, "RUMB-0003");
+                assert_eq!(into, "RUMB-0002");
                 assert_eq!(actor, "operator");
             }
             other => panic!("unexpected command: {other:?}"),
