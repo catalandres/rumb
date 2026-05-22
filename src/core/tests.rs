@@ -1944,4 +1944,5 @@ fn migration_six_seeds_inbox_on_existing_repo() {
     let inbox = inbox(&project);
     assert_eq!(inbox.kind, "inbox");
     assert_eq!(inbox.parent_id.as_deref(), Some(ROOT_ID));
+    assert_eq!(inbox.tier, Tier::Standard);
 }
