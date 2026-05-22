@@ -11,9 +11,9 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use rumb::{
-    default_ttl_seconds, parse_ttl, AddEdge, Claim, ClaimItem, CreateItem, DoneItem, Edge,
+    default_ttl_seconds, parse_ttl, AddEdge, Capture, Claim, ClaimItem, CreateItem, DoneItem, Edge,
     EdgeKind, EditItem, Event, InitOptions, Item, Merge, MergeOutcome, Recast, ReleaseClaim,
-    RenewClaim, Reparent, ReviewItem, RumbError, RumbProject, RunCommand, RunRecord, Status,
+    RenewClaim, Reparent, ReviewItem, RumbError, RumbProject, RunCommand, RunRecord, Status, Tier,
     Unlink, UnlinkOutcome, UpdateItemStatus,
 };
 
@@ -82,6 +82,7 @@ impl RumbMcp {
         Parameters(args): Parameters<ItemCreateArgs>,
     ) -> Result<CallToolResult, ErrorData> {
         let status = parse_status(args.status.as_deref().unwrap_or("draft"))?;
+        let tier = parse_tier(args.tier.as_deref().unwrap_or("standard"))?;
         let project = self.project()?;
         let item = project
             .create_item(CreateItem {
@@ -89,6 +90,7 @@ impl RumbMcp {
                 title: args.title,
                 parent_id: args.parent,
                 status,
+                tier,
                 source_ref: args.source,
             })
             .map_err(to_mcp_error)?;
@@ -254,12 +256,14 @@ impl RumbMcp {
         &self,
         Parameters(args): Parameters<EditArgs>,
     ) -> Result<CallToolResult, ErrorData> {
+        let tier = args.tier.as_deref().map(parse_tier).transpose()?;
         let project = self.project()?;
         let item = project
             .edit(EditItem {
                 item_id: args.id,
                 title: args.title,
                 source_ref: args.source,
+                tier,
                 actor: args.actor,
             })
             .map_err(to_mcp_error)?;
@@ -316,6 +320,18 @@ impl RumbMcp {
         Ok(structured(merge_json(&outcome)))
     }
 
+    #[tool(description = "Capture a quick note into the rumb inbox as a draft")]
+    async fn capture(
+        &self,
+        Parameters(args): Parameters<CaptureArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let project = self.project()?;
+        let item = project
+            .capture(Capture { text: args.text })
+            .map_err(to_mcp_error)?;
+        Ok(structured(item_json(&item)))
+    }
+
     #[tool(description = "List rumb events, optionally scoped to one item")]
     async fn log(
         &self,
@@ -340,6 +356,7 @@ struct ItemCreateArgs {
     title: String,
     parent: String,
     status: Option<String>,
+    tier: Option<String>,
     source: Option<String>,
 }
 
@@ -415,7 +432,13 @@ struct EditArgs {
     id: String,
     title: Option<String>,
     source: Option<String>,
+    tier: Option<String>,
     actor: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct CaptureArgs {
+    text: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -459,9 +482,11 @@ fn item_json(item: &Item) -> Value {
         "id": item.id,
         "kind": item.kind,
         "status": item.status.to_string(),
+        "tier": item.tier.to_string(),
         "title": item.title,
         "parent_id": item.parent_id,
         "source_ref": item.source_ref,
+        "body": item.body,
     })
 }
 
@@ -530,6 +555,10 @@ fn parse_status(value: &str) -> Result<Status, ErrorData> {
     Status::from_str(value).map_err(to_mcp_error)
 }
 
+fn parse_tier(value: &str) -> Result<Tier, ErrorData> {
+    Tier::from_str(value).map_err(to_mcp_error)
+}
+
 fn parse_edge_kind(value: &str) -> Result<EdgeKind, ErrorData> {
     EdgeKind::from_str(value).map_err(to_mcp_error)
 }
@@ -548,7 +577,7 @@ fn to_mcp_error(err: RumbError) -> ErrorData {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rumb::{RunStatus, Status};
+    use rumb::{RunStatus, Status, Tier};
 
     #[test]
     fn item_json_has_mcp_shape() {
@@ -558,7 +587,9 @@ mod tests {
             kind: "feature".to_owned(),
             title: "MCP".to_owned(),
             status: Status::Ready,
+            tier: Tier::Hard,
             source_ref: Some("README.md#mcp".to_owned()),
+            body: None,
             created_at: 1,
             updated_at: 2,
         };
@@ -569,9 +600,11 @@ mod tests {
                 "id": "RUMB-0001",
                 "kind": "feature",
                 "status": "ready",
+                "tier": "hard",
                 "title": "MCP",
                 "parent_id": "RUMB-0000",
                 "source_ref": "README.md#mcp",
+                "body": null,
             })
         );
     }

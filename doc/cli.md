@@ -45,13 +45,14 @@ ok
 ```text
 rumb item create --kind <kind> --title <title> --parent <id>
                  [--status draft|ready|blocked|in_review|done|superseded|abandoned]
+                 [--tier routine|standard|hard]
                  [--source <ref>]
 ```
 
 Create an item under `--parent`. `--kind` and `--title` must be non-empty. The
-parent must exist. `--status` defaults to `draft`. `--source` is an optional free
-reference (for example, where the item came from). Prints
-`id  kind  status  title`.
+parent must exist. `--status` defaults to `draft`; `--tier` defaults to
+`standard`. `--source` is an optional free reference (for example, where the item
+came from). Prints `id  kind  status  title`.
 
 ### `rumb item status <id> <status> --actor <actor>`
 
@@ -122,10 +123,11 @@ Move an item under a new parent. Rejects cycles and is blocked while the item ha
 an active claim. `--confirm` is required when the move lands the item at depth 1
 (directly under the root). Prints `id  parent-id  status  title`.
 
-### `rumb edit <id> [--title <title>] [--source <ref>] --actor <actor>`
+### `rumb edit <id> [--title <title>] [--source <ref>] [--tier <tier>] --actor <actor>`
 
-Set the item's title and/or source reference; at least one is required. A
-non-empty title is enforced. Prints `id  kind  status  title`.
+Set the item's title, source reference, and/or tier; at least one is required. A
+non-empty title is enforced. `--tier` is one of `routine`, `standard`, `hard`.
+Prints `id  kind  status  title`.
 
 ### `rumb recast <id> --kind <kind> --actor <actor>`
 
@@ -145,6 +147,16 @@ edges to `to` (de-duplicated), record a `supersedes` edge `to -> from`, and mark
 `from` superseded (never deleted). Blocked while `from` has an active claim; the
 root cannot be merged away. Prints a `merged` line, a `moved` line per reparented
 child, and a `supersedes` line.
+
+## Capture
+
+### `rumb capture "<text>"`
+
+Drop a quick thought into the inbox as a draft `note` — no kind decision required
+at intake. The full text is stored in the item's `body`; the `title` is a
+whitespace-collapsed, truncated one-line summary. Captures land as `draft`, so
+they do not appear in `rumb ready` until you groom them out of the inbox
+(`reparent`/`recast`/`edit`). Prints `id  kind  status  title`.
 
 ## Verification
 

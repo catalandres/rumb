@@ -77,9 +77,16 @@ items (
   kind       TEXT NOT NULL,
   title      TEXT NOT NULL,
   status     TEXT NOT NULL,           -- draft|ready|blocked|in_review|done|superseded|abandoned
+  tier       TEXT,                    -- routine|standard|hard (default 'standard'; never null in practice)
   source_ref TEXT,
+  body       TEXT,                    -- full text of a captured note; null for most items
   created_at BIGINT NOT NULL,
   updated_at BIGINT NOT NULL
+)
+
+meta (
+  key   TEXT PRIMARY KEY,             -- e.g. 'inbox_id'
+  value TEXT NOT NULL
 )
 
 edges (
@@ -157,6 +164,7 @@ Events are append-only and ordered by `seq`. The actions rumb emits:
 | `item.recast` | kind changed (undoable) | item ID |
 | `item.merge` | item merged into another, superseded (undoable) | item ID (the source) |
 | `edge.unlink` | edge removed (undoable) | `from->to` |
+| `item.capture` | note captured into the inbox (undoable) | item ID |
 
 ## Concurrency and durability
 

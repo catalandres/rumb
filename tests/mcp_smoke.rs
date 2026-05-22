@@ -189,7 +189,8 @@ fn mcp_tools_create_ready_and_log_structured_repo_state() {
             "source": "mcp-smoke",
         }),
     );
-    assert_eq!(item["id"], "RUMB-0001");
+    // RUMB-0001 is the inbox (seeded at init), so the first user item is RUMB-0002.
+    assert_eq!(item["id"], "RUMB-0002");
     assert_eq!(item["kind"], "feature");
     assert_eq!(item["status"], "ready");
     assert_eq!(item["parent_id"], "RUMB-0000");
@@ -197,17 +198,17 @@ fn mcp_tools_create_ready_and_log_structured_repo_state() {
 
     let ready = client.call_tool("ready", json!({}));
     let items = ready["items"].as_array().unwrap();
-    assert_eq!(items.len(), 1);
-    assert_eq!(items[0]["id"], "RUMB-0001");
+    assert_eq!(items.len(), 1); // the inbox is reserved, never ready
+    assert_eq!(items[0]["id"], "RUMB-0002");
     assert_eq!(items[0]["title"], "MCP smoke item");
     assert_eq!(items[0]["status"], "ready");
 
-    let log = client.call_tool("log", json!({ "id": "RUMB-0001" }));
+    let log = client.call_tool("log", json!({ "id": "RUMB-0002" }));
     let events = log["events"].as_array().unwrap();
     assert_eq!(events.len(), 1);
     assert_eq!(events[0]["action"], "item.create");
     assert_eq!(events[0]["object_type"], "item");
-    assert_eq!(events[0]["object_id"], "RUMB-0001");
+    assert_eq!(events[0]["object_id"], "RUMB-0002");
     assert_eq!(events[0]["payload"]["kind"], "feature");
     assert_eq!(events[0]["payload"]["status"], "ready");
 }
@@ -226,43 +227,44 @@ fn mcp_grooming_verbs_reshape_the_graph() {
             json!({ "kind": "feature", "title": title, "parent": "RUMB-0000", "status": "ready" }),
         );
     }
-    // A = RUMB-0001, B = RUMB-0002, Child = RUMB-0003.
+    // RUMB-0001 is the inbox, so A = RUMB-0002, B = RUMB-0003, Child = RUMB-0004.
 
     let recast = client.call_tool(
         "recast",
-        json!({ "id": "RUMB-0001", "kind": "spec", "actor": "mcp-smoke" }),
+        json!({ "id": "RUMB-0002", "kind": "spec", "actor": "mcp-smoke" }),
     );
     assert_eq!(recast["kind"], "spec");
 
     let edit = client.call_tool(
         "edit",
-        json!({ "id": "RUMB-0001", "title": "A renamed", "actor": "mcp-smoke" }),
+        json!({ "id": "RUMB-0002", "title": "A renamed", "tier": "hard", "actor": "mcp-smoke" }),
     );
     assert_eq!(edit["title"], "A renamed");
+    assert_eq!(edit["tier"], "hard");
 
     let reparent = client.call_tool(
         "reparent",
-        json!({ "id": "RUMB-0003", "under": "RUMB-0002", "actor": "mcp-smoke" }),
+        json!({ "id": "RUMB-0004", "under": "RUMB-0003", "actor": "mcp-smoke" }),
     );
-    assert_eq!(reparent["parent_id"], "RUMB-0002");
+    assert_eq!(reparent["parent_id"], "RUMB-0003");
 
     client.call_tool(
         "edge_add",
-        json!({ "from": "RUMB-0002", "to": "RUMB-0001", "kind": "depends_on" }),
+        json!({ "from": "RUMB-0003", "to": "RUMB-0002", "kind": "depends_on" }),
     );
     let unlink = client.call_tool(
         "unlink",
-        json!({ "from": "RUMB-0002", "to": "RUMB-0001", "kind": "depends_on", "actor": "mcp-smoke" }),
+        json!({ "from": "RUMB-0003", "to": "RUMB-0002", "kind": "depends_on", "actor": "mcp-smoke" }),
     );
-    assert_eq!(unlink["edge"]["from"], "RUMB-0002");
+    assert_eq!(unlink["edge"]["from"], "RUMB-0003");
 
     let merge = client.call_tool(
         "merge",
-        json!({ "from": "RUMB-0001", "into": "RUMB-0002", "actor": "mcp-smoke" }),
+        json!({ "from": "RUMB-0002", "into": "RUMB-0003", "actor": "mcp-smoke" }),
     );
     assert_eq!(merge["from"]["status"], "superseded");
-    assert_eq!(merge["supersedes_edge"]["from"], "RUMB-0002");
-    assert_eq!(merge["supersedes_edge"]["to"], "RUMB-0001");
+    assert_eq!(merge["supersedes_edge"]["from"], "RUMB-0003");
+    assert_eq!(merge["supersedes_edge"]["to"], "RUMB-0002");
 }
 
 #[test]
@@ -283,24 +285,25 @@ fn mcp_tools_claim_run_and_release_in_temp_git_repo() {
             "source": "mcp-claim-run-smoke",
         }),
     );
-    assert_eq!(item["id"], "RUMB-0001");
+    // RUMB-0001 is the inbox, so the created foundation item is RUMB-0002.
+    assert_eq!(item["id"], "RUMB-0002");
 
     let claim = client.call_tool(
         "claim",
         json!({
-            "id": "RUMB-0001",
+            "id": "RUMB-0002",
             "actor": "mcp-smoke",
             "confirm_foundation": true,
         }),
     );
     assert_eq!(claim["id"], "CLAIM-0001");
-    assert_eq!(claim["item_id"], "RUMB-0001");
+    assert_eq!(claim["item_id"], "RUMB-0002");
     assert_eq!(claim["actor_id"], "mcp-smoke");
     assert_eq!(claim["status"], "active");
-    assert_eq!(claim["branch"], "rumb/RUMB-0001-mcp-claim-run");
+    assert_eq!(claim["branch"], "rumb/RUMB-0002-mcp-claim-run");
     assert_eq!(
         claim["worktree_path"],
-        ".rumb/worktrees/RUMB-0001-mcp-claim-run"
+        ".rumb/worktrees/RUMB-0002-mcp-claim-run"
     );
     assert!(claim["lease_until"].as_u64().unwrap() > 0);
     assert!(dir
@@ -311,13 +314,13 @@ fn mcp_tools_claim_run_and_release_in_temp_git_repo() {
     let run = client.call_tool(
         "run",
         json!({
-            "id": "RUMB-0001",
+            "id": "RUMB-0002",
             "actor": "mcp-smoke",
             "command": ["sh", "-c", "printf mcp-run-ok"],
         }),
     );
     assert_eq!(run["id"], "RUN-0001");
-    assert_eq!(run["item_id"], "RUMB-0001");
+    assert_eq!(run["item_id"], "RUMB-0002");
     assert_eq!(run["status"], "passed");
     assert_eq!(run["output_path"], ".rumb/runs/RUN-0001.log");
 

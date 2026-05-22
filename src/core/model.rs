@@ -8,7 +8,8 @@ use thiserror::Error;
 pub(crate) const STATE_DIR: &str = ".rumb";
 pub(crate) const STATE_FILE: &str = "state.duckdb";
 pub(crate) const ROOT_ID: &str = "RUMB-0000";
-pub(crate) const CURRENT_SCHEMA_VERSION: i32 = 5;
+pub(crate) const META_INBOX_ID: &str = "inbox_id";
+pub(crate) const CURRENT_SCHEMA_VERSION: i32 = 6;
 pub(crate) const DEFAULT_TTL_SECONDS: u64 = 4 * 60 * 60;
 pub(crate) const STORAGE_RETRY_ATTEMPTS: usize = 5;
 
@@ -26,6 +27,8 @@ pub enum RumbError {
     InvalidStatus(String),
     #[error("invalid edge kind: {0}")]
     InvalidEdgeKind(String),
+    #[error("invalid tier: {0}")]
+    InvalidTier(String),
     #[error("invalid ttl: {0}")]
     InvalidTtl(String),
     #[error("invalid item reference: {0}")]
@@ -34,6 +37,8 @@ pub enum RumbError {
     MissingItem(String),
     #[error("edge does not exist: {0}")]
     MissingEdge(String),
+    #[error("inbox node is not initialized")]
+    MissingInbox,
     #[error("claim does not exist: {0}")]
     MissingClaim(String),
     #[error("item kind must not be empty")]
@@ -84,6 +89,7 @@ pub struct CreateItem {
     pub title: String,
     pub parent_id: String,
     pub status: Status,
+    pub tier: Tier,
     pub source_ref: Option<String>,
 }
 
@@ -154,7 +160,13 @@ pub struct EditItem {
     pub item_id: String,
     pub title: Option<String>,
     pub source_ref: Option<String>,
+    pub tier: Option<Tier>,
     pub actor: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Capture {
+    pub text: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -205,7 +217,9 @@ pub struct Item {
     pub kind: String,
     pub title: String,
     pub status: Status,
+    pub tier: Tier,
     pub source_ref: Option<String>,
+    pub body: Option<String>,
     pub created_at: u64,
     pub updated_at: u64,
 }
@@ -397,6 +411,40 @@ impl FromStr for Status {
             "superseded" => Ok(Self::Superseded),
             "abandoned" => Ok(Self::Abandoned),
             _ => Err(RumbError::InvalidStatus(value.to_owned())),
+        }
+    }
+}
+
+/// The work-weight of an item: a property of the work itself, not a model name.
+/// Displayed (not filtered) in `ready`/`view`; tier-based dispatch is deferred.
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq, ValueEnum)]
+#[value(rename_all = "snake_case")]
+pub enum Tier {
+    Routine,
+    #[default]
+    Standard,
+    Hard,
+}
+
+impl Display for Tier {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Routine => "routine",
+            Self::Standard => "standard",
+            Self::Hard => "hard",
+        })
+    }
+}
+
+impl FromStr for Tier {
+    type Err = RumbError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "routine" => Ok(Self::Routine),
+            "standard" => Ok(Self::Standard),
+            "hard" => Ok(Self::Hard),
+            _ => Err(RumbError::InvalidTier(value.to_owned())),
         }
     }
 }

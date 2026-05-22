@@ -15,7 +15,7 @@ impl RumbProject {
         self.mutate(|m| {
             let mut item = load_item(m.conn(), &input.item_id)?
                 .ok_or_else(|| RumbError::MissingItem(input.item_id.clone()))?;
-            if is_reserved_node(&item.id) {
+            if is_reserved_node(m.conn(), &item.id)? {
                 return Err(RumbError::ReservedNode(item.id.clone()));
             }
             let now = timestamp();
@@ -52,10 +52,10 @@ impl RumbProject {
         })
     }
 
-    /// Set previously-immutable fields (title and/or source_ref). Claim-safe and
-    /// allowed on reserved nodes (renaming the project root is not destructive).
+    /// Set previously-immutable fields (title, source_ref, and/or tier). Claim-safe
+    /// and allowed on reserved nodes (renaming the project root is not destructive).
     pub fn edit(&self, input: EditItem) -> Result<Item, RumbError> {
-        if input.title.is_none() && input.source_ref.is_none() {
+        if input.title.is_none() && input.source_ref.is_none() && input.tier.is_none() {
             return Err(RumbError::NoGroomingChanges);
         }
         if input
@@ -76,6 +76,9 @@ impl RumbProject {
             if let Some(source_ref) = &input.source_ref {
                 item.source_ref = Some(source_ref.clone());
             }
+            if let Some(tier) = input.tier {
+                item.tier = tier;
+            }
             item.updated_at = now;
             m.update_item(&item)?;
             m.event(
@@ -86,6 +89,7 @@ impl RumbProject {
                     "actor": &input.actor,
                     "title": input.title.as_deref(),
                     "source_ref": input.source_ref.as_deref(),
+                    "tier": input.tier.map(|tier| tier.to_string()),
                 })
                 .to_string(),
                 now,
@@ -106,7 +110,7 @@ impl RumbProject {
         self.mutate(|m| {
             let mut item = load_item(m.conn(), &input.item_id)?
                 .ok_or_else(|| RumbError::MissingItem(input.item_id.clone()))?;
-            if is_reserved_node(&item.id) {
+            if is_reserved_node(m.conn(), &item.id)? {
                 return Err(RumbError::ReservedNode(item.id.clone()));
             }
             let now = timestamp();
@@ -144,8 +148,9 @@ impl RumbProject {
             let now = timestamp();
             let items = load_items(m.conn())?;
             let claimed = active_claim_item_ids(m.conn(), now)?;
+            let reserved = reserved_node_ids(m.conn())?;
             let ready_before: HashSet<String> =
-                compute_ready(&items, &load_edges(m.conn())?, &claimed)
+                compute_ready(&items, &load_edges(m.conn())?, &claimed, &reserved)
                     .into_iter()
                     .map(|item| item.id)
                     .collect();
@@ -155,7 +160,7 @@ impl RumbProject {
             // Removing an edge can only relax readiness, so any item ready now that
             // was not ready before is newly unblocked. Items are unchanged by an
             // edge delete, so the same `items` snapshot is reused.
-            let newly_ready = compute_ready(&items, &load_edges(m.conn())?, &claimed)
+            let newly_ready = compute_ready(&items, &load_edges(m.conn())?, &claimed, &reserved)
                 .into_iter()
                 .filter(|item| !ready_before.contains(&item.id))
                 .collect();
@@ -193,7 +198,7 @@ impl RumbProject {
                 .ok_or_else(|| RumbError::MissingItem(input.from_id.clone()))?;
             let into = load_item(m.conn(), &input.into_id)?
                 .ok_or_else(|| RumbError::MissingItem(input.into_id.clone()))?;
-            if is_reserved_node(&from.id) {
+            if is_reserved_node(m.conn(), &from.id)? {
                 return Err(RumbError::ReservedNode(from.id.clone()));
             }
             let now = timestamp();
