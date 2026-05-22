@@ -193,7 +193,8 @@ pub(crate) fn ensure_schema(conn: &mut Connection) -> Result<(), RumbError> {
                 pk_json TEXT NOT NULL,
                 before_json TEXT,
                 after_json TEXT,
-                PRIMARY KEY (changeset_seq, delta_idx)
+                PRIMARY KEY (changeset_seq, delta_idx),
+                FOREIGN KEY (changeset_seq) REFERENCES changesets (seq)
             );
 
             CREATE TABLE IF NOT EXISTS snapshots (
@@ -234,6 +235,10 @@ pub(crate) fn ensure_schema(conn: &mut Connection) -> Result<(), RumbError> {
     Ok(())
 }
 
+// Keep `item_row_value`/`edge_row_value` in sync with the `items`/`edges` table
+// columns: changeset deltas and snapshots store these as the canonical row image,
+// so a new column (e.g. tier/body in a later migration) MUST be added here too or
+// it is silently dropped from history and replay.
 pub(crate) fn item_row_value(item: &Item) -> serde_json::Value {
     json!({
         "id": item.id,

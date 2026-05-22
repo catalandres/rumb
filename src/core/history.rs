@@ -176,8 +176,8 @@ impl<'c> Mutation<'c> {
 impl RumbProject {
     /// Run a state mutation through the recorder. The body performs all writes
     /// via the `Mutation` handle (item/edge writes are delta-captured; reads and
-    /// lifecycle-table writes go through its `Deref<Target = Connection>`), and
-    /// calls `m.event(..)` exactly once to declare the changeset. On success the
+    /// lifecycle-table writes go through its `conn()` accessor), and calls
+    /// `m.event(..)` exactly once to declare the changeset. On success the
     /// changeset header and deltas are written atomically with the data.
     pub(crate) fn mutate<T>(
         &self,
