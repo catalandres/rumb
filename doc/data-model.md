@@ -76,7 +76,7 @@ items (
   parent_id  TEXT,                    -- primary tree parent; NULL only for the root
   kind       TEXT NOT NULL,
   title      TEXT NOT NULL,
-  status     TEXT NOT NULL,           -- draft|ready|blocked|claimed|in_review|done|superseded|abandoned
+  status     TEXT NOT NULL,           -- draft|ready|blocked|in_review|done|superseded|abandoned
   source_ref TEXT,
   created_at BIGINT NOT NULL,
   updated_at BIGINT NOT NULL
@@ -152,6 +152,11 @@ Events are append-only and ordered by `seq`. The actions rumb emits:
 | `run.record` | run finished and recorded | item ID |
 | `item.review` | item moved to review | item ID |
 | `item.done` | item marked done | item ID |
+| `item.reparent` | item moved under a new parent (undoable) | item ID |
+| `item.edit` | title/source edited (undoable) | item ID |
+| `item.recast` | kind changed (undoable) | item ID |
+| `item.merge` | item merged into another, superseded (undoable) | item ID (the source) |
+| `edge.unlink` | edge removed (undoable) | `from->to` |
 
 ## Concurrency and durability
 

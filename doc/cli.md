@@ -44,7 +44,7 @@ ok
 
 ```text
 rumb item create --kind <kind> --title <title> --parent <id>
-                 [--status draft|ready|blocked|claimed|in_review|done|superseded|abandoned]
+                 [--status draft|ready|blocked|in_review|done|superseded|abandoned]
                  [--source <ref>]
 ```
 
@@ -108,8 +108,43 @@ renew, and only while the claim is still active and unexpired.
 
 ### `rumb release <claim-id> --actor <actor>`
 
-Release a claim early. The owning actor sets it to `released`; if no other active
-claim remains, the item returns to `ready`.
+Release a claim early. The owning actor sets it to `released`. The item's status
+is unchanged; with no active claim left it appears in `rumb ready` again.
+
+## Grooming
+
+These verbs reshape the graph after items exist. Each is recorded as an undoable
+changeset. See [Grooming](concepts.md#grooming) for the full semantics.
+
+### `rumb reparent <id> --under <parent> --actor <actor> [--confirm]`
+
+Move an item under a new parent. Rejects cycles and is blocked while the item has
+an active claim. `--confirm` is required when the move lands the item at depth 1
+(directly under the root). Prints `id  parent-id  status  title`.
+
+### `rumb edit <id> [--title <title>] [--source <ref>] --actor <actor>`
+
+Set the item's title and/or source reference; at least one is required. A
+non-empty title is enforced. Prints `id  kind  status  title`.
+
+### `rumb recast <id> --kind <kind> --actor <actor>`
+
+Change an item's kind. `--kind` must be non-empty; the root cannot be recast.
+Prints `id  kind  status  title`.
+
+### `rumb unlink <from> <to> --kind <kind> --actor <actor>`
+
+Remove a graph edge. If removing a `depends_on`/`blocks` edge unblocks work, the
+newly ready items are listed. Prints `unlinked  from  to  kind`, then a
+`ready  id  kind  title` line per newly ready item.
+
+### `rumb merge <from> --into <to> --actor <actor>`
+
+Fold `from` into `to`: reparent `from`'s children under `to`, rewire `from`'s
+edges to `to` (de-duplicated), record a `supersedes` edge `to -> from`, and mark
+`from` superseded (never deleted). Blocked while `from` has an active claim; the
+root cannot be merged away. Prints a `merged` line, a `moved` line per reparented
+child, and a `supersedes` line.
 
 ## Verification
 
