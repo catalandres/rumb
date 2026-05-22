@@ -5,9 +5,10 @@ use std::process::Command as ProcessCommand;
 use clap::Parser;
 use rumb::cli::{Cli, Command, EdgeCommand, ItemCommand, McpCommand, ViewCommand};
 use rumb::{
-    install_mcp, parse_ttl, AddEdge, ClaimItem, CreateItem, DoneItem, EditItem, InitOptions, Item,
-    ItemDetails, McpInstallOptions, Merge, MergeOutcome, Recast, ReleaseClaim, RenewClaim,
-    Reparent, ReviewItem, RumbProject, RunCommand, Unlink, UnlinkOutcome, UpdateItemStatus,
+    install_mcp, parse_ttl, AddEdge, Capture, ClaimItem, CreateItem, DoneItem, EditItem,
+    InitOptions, Item, ItemDetails, McpInstallOptions, Merge, MergeOutcome, Recast, ReleaseClaim,
+    RenewClaim, Reparent, ReviewItem, RumbProject, RunCommand, Unlink, UnlinkOutcome,
+    UpdateItemStatus,
 };
 
 fn main() {
@@ -46,6 +47,7 @@ fn run() -> Result<(), rumb::RumbError> {
                     title,
                     parent,
                     status,
+                    tier,
                     source,
                 },
         } => {
@@ -55,6 +57,7 @@ fn run() -> Result<(), rumb::RumbError> {
                 title,
                 parent_id: parent,
                 status,
+                tier,
                 source_ref: source,
             })?;
             println!(
@@ -97,8 +100,8 @@ fn run() -> Result<(), rumb::RumbError> {
             let project = RumbProject::discover(cwd)?;
             for item in project.ready_items()? {
                 println!(
-                    "{}\t{}\t{}\t{}",
-                    item.id, item.kind, item.status, item.title
+                    "{}\t{}\t{}\t{}\t{}",
+                    item.id, item.kind, item.status, item.tier, item.title
                 );
             }
         }
@@ -188,6 +191,7 @@ fn run() -> Result<(), rumb::RumbError> {
             id,
             title,
             source,
+            tier,
             actor,
         } => {
             let project = RumbProject::discover(cwd)?;
@@ -195,6 +199,7 @@ fn run() -> Result<(), rumb::RumbError> {
                 item_id: id,
                 title,
                 source_ref: source,
+                tier,
                 actor,
             })?;
             println!(
@@ -237,6 +242,14 @@ fn run() -> Result<(), rumb::RumbError> {
                 actor,
             })?;
             print_merge(&outcome);
+        }
+        Command::Capture { text } => {
+            let project = RumbProject::discover(cwd)?;
+            let item = project.capture(Capture { text })?;
+            println!(
+                "{}\t{}\t{}\t{}",
+                item.id, item.kind, item.status, item.title
+            );
         }
         Command::Mcp {
             command: McpCommand::Serve,
@@ -422,10 +435,12 @@ fn format_item_details(details: &ItemDetails) -> String {
     output.push_str(&format!("kind\t{}\n", item.kind));
     output.push_str(&format!("title\t{}\n", item.title));
     output.push_str(&format!("status\t{}\n", item.status));
+    output.push_str(&format!("tier\t{}\n", item.tier));
     output.push_str(&format!(
         "source_ref\t{}\n",
         item.source_ref.as_deref().unwrap_or("")
     ));
+    output.push_str(&format!("body\t{}\n", item.body.as_deref().unwrap_or("")));
     output.push_str(&format!("created_at\t{}\n", item.created_at));
     output.push_str(&format!("updated_at\t{}\n", item.updated_at));
     output.push_str(&format!("depth\t{}\n", details.depth));
@@ -604,6 +619,7 @@ mod tests {
     use super::*;
     use rumb::{
         Claim, ClaimStatus, Edge, EdgeKind, Event, Item, Proposal, RunRecord, RunStatus, Status,
+        Tier,
     };
 
     fn item(id: &str, parent_id: Option<&str>, title: &str) -> Item {
@@ -613,7 +629,9 @@ mod tests {
             kind: "feature".to_owned(),
             title: title.to_owned(),
             status: Status::Ready,
+            tier: Tier::Standard,
             source_ref: None,
+            body: None,
             created_at: 1,
             updated_at: 2,
         }

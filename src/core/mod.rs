@@ -6,6 +6,7 @@ use std::process::Command;
 use duckdb::{params, Connection};
 use serde_json::json;
 
+mod capture;
 mod claims;
 mod graph;
 mod grooming;
@@ -54,15 +55,17 @@ impl RumbProject {
         fs::create_dir_all(self.state_dir())?;
 
         self.mutate(|m| {
+            let now = timestamp();
             if !item_exists(m.conn(), ROOT_ID)? {
-                let now = timestamp();
                 let root = Item {
                     id: ROOT_ID.to_owned(),
                     parent_id: None,
                     kind: "project".to_owned(),
                     title: options.name.clone(),
                     status: Status::Ready,
+                    tier: Tier::Standard,
                     source_ref: None,
+                    body: None,
                     created_at: now,
                     updated_at: now,
                 };
@@ -75,6 +78,9 @@ impl RumbProject {
                     now,
                 );
             }
+            // Seed the inbox now that root exists (fresh repos; existing repos already
+            // got it from migration 6). Raw insert — infrastructure, not timeline history.
+            ensure_inbox(m.conn(), now)?;
             Ok(())
         })?;
 
@@ -110,7 +116,9 @@ impl RumbProject {
                 kind: input.kind.clone(),
                 title: input.title.clone(),
                 status: input.status,
+                tier: input.tier,
                 source_ref: input.source_ref.clone(),
+                body: None,
                 created_at: now,
                 updated_at: now,
             };
@@ -122,6 +130,7 @@ impl RumbProject {
                 json!({
                     "kind": &item.kind,
                     "status": item.status.to_string(),
+                    "tier": item.tier.to_string(),
                     "parent_id": item.parent_id.as_deref(),
                     "source_ref": item.source_ref.as_deref(),
                 })
@@ -173,7 +182,8 @@ impl RumbProject {
             let items = load_items(&conn)?;
             let edges = load_edges(&conn)?;
             let claimed_item_ids = active_claim_item_ids(&conn, timestamp())?;
-            Ok(compute_ready(&items, &edges, &claimed_item_ids))
+            let reserved = reserved_node_ids(&conn)?;
+            Ok(compute_ready(&items, &edges, &claimed_item_ids, &reserved))
         })
     }
 

@@ -9,10 +9,11 @@ pub(crate) fn compute_ready(
     items: &[Item],
     edges: &[Edge],
     claimed_ids: &HashSet<String>,
+    reserved_ids: &HashSet<String>,
 ) -> Vec<Item> {
     items
         .iter()
-        .filter(|item| item.id != ROOT_ID)
+        .filter(|item| !reserved_ids.contains(&item.id))
         .filter(|item| !claimed_ids.contains(&item.id))
         .filter(|item| item.status == Status::Ready)
         .filter(|item| dependencies_satisfied(item, edges, items))

@@ -35,6 +35,7 @@ fn init_project(path: &Path) -> RumbProject {
 fn create_ready_item(project: &RumbProject, parent_id: &str, title: &str) -> Item {
     project
         .create_item(CreateItem {
+            tier: Tier::Standard,
             kind: "feature".to_owned(),
             title: title.to_owned(),
             parent_id: parent_id.to_owned(),
@@ -107,6 +108,7 @@ fn id_allocation_is_sequential() {
 
     let first = project
         .create_item(CreateItem {
+            tier: Tier::Standard,
             kind: "feature".to_owned(),
             title: "First".to_owned(),
             parent_id: ROOT_ID.to_owned(),
@@ -116,6 +118,7 @@ fn id_allocation_is_sequential() {
         .unwrap();
     let second = project
         .create_item(CreateItem {
+            tier: Tier::Standard,
             kind: "feature".to_owned(),
             title: "Second".to_owned(),
             parent_id: ROOT_ID.to_owned(),
@@ -124,8 +127,9 @@ fn id_allocation_is_sequential() {
         })
         .unwrap();
 
-    assert_eq!(first.id, "RUMB-0001");
-    assert_eq!(second.id, "RUMB-0002");
+    // RUMB-0001 is the inbox (seeded at init), so user items start at RUMB-0002.
+    assert_eq!(first.id, "RUMB-0002");
+    assert_eq!(second.id, "RUMB-0003");
 }
 
 #[test]
@@ -135,6 +139,7 @@ fn dependency_readiness_honors_depends_on_and_blocks() {
 
     let done_dependency = project
         .create_item(CreateItem {
+            tier: Tier::Standard,
             kind: "task".to_owned(),
             title: "Done dependency".to_owned(),
             parent_id: ROOT_ID.to_owned(),
@@ -144,6 +149,7 @@ fn dependency_readiness_honors_depends_on_and_blocks() {
         .unwrap();
     let satisfied = project
         .create_item(CreateItem {
+            tier: Tier::Standard,
             kind: "feature".to_owned(),
             title: "Satisfied".to_owned(),
             parent_id: ROOT_ID.to_owned(),
@@ -153,6 +159,7 @@ fn dependency_readiness_honors_depends_on_and_blocks() {
         .unwrap();
     let unsatisfied = project
         .create_item(CreateItem {
+            tier: Tier::Standard,
             kind: "feature".to_owned(),
             title: "Unsatisfied".to_owned(),
             parent_id: ROOT_ID.to_owned(),
@@ -162,6 +169,7 @@ fn dependency_readiness_honors_depends_on_and_blocks() {
         .unwrap();
     let blocker = project
         .create_item(CreateItem {
+            tier: Tier::Standard,
             kind: "feature".to_owned(),
             title: "Blocker".to_owned(),
             parent_id: ROOT_ID.to_owned(),
@@ -171,6 +179,7 @@ fn dependency_readiness_honors_depends_on_and_blocks() {
         .unwrap();
     let blocked = project
         .create_item(CreateItem {
+            tier: Tier::Standard,
             kind: "feature".to_owned(),
             title: "Blocked".to_owned(),
             parent_id: ROOT_ID.to_owned(),
@@ -260,7 +269,7 @@ fn depth_two_claim_does_not_require_foundation_confirmation() {
 
     assert_eq!(claim.id, "CLAIM-0001");
     assert_eq!(claim.status, ClaimStatus::Active);
-    assert_eq!(claim.branch, "rumb/RUMB-0002-child-work");
+    assert_eq!(claim.branch, format!("rumb/{}-child-work", child.id));
     assert!(dir.path().join(&claim.worktree_path).is_dir());
 }
 
@@ -788,6 +797,7 @@ fn item_status_updates_transactionally_and_logs_actor() {
     let project = init_project(dir.path());
     let item = project
         .create_item(CreateItem {
+            tier: Tier::Standard,
             kind: "feature".to_owned(),
             title: "Status".to_owned(),
             parent_id: ROOT_ID.to_owned(),
@@ -860,13 +870,14 @@ fn list_items_and_item_details_include_related_state() {
             .collect::<Vec<_>>(),
         vec![
             "RUMB-0000",
+            "RUMB-0001", // inbox, seeded at init
             parent.id.as_str(),
             child.id.as_str(),
             grandchild.id.as_str()
         ]
     );
 
-    for reference in ["2", "0002", child.id.as_str()] {
+    for reference in ["3", "0003", child.id.as_str()] {
         let details = project.item_details(reference).unwrap();
         assert_eq!(details.item.id, child.id);
         assert_eq!(details.depth, 2);
@@ -912,6 +923,7 @@ fn events_are_created_for_mutations_and_can_be_filtered() {
     let project = init_project(dir.path());
     let item = project
         .create_item(CreateItem {
+            tier: Tier::Standard,
             kind: "feature".to_owned(),
             title: "Claim flow".to_owned(),
             parent_id: ROOT_ID.to_owned(),
@@ -1087,6 +1099,7 @@ fn failed_mutation_records_no_changeset() {
         .unwrap();
 
     let result = project.create_item(CreateItem {
+        tier: Tier::Standard,
         kind: "feature".to_owned(),
         title: "orphan".to_owned(),
         parent_id: "RUMB-9999".to_owned(),
@@ -1176,6 +1189,7 @@ fn genesis_snapshot_written_once_and_idempotent() {
 fn create_item_with(project: &RumbProject, parent_id: &str, title: &str, status: Status) -> Item {
     project
         .create_item(CreateItem {
+            tier: Tier::Standard,
             kind: "feature".to_owned(),
             title: title.to_owned(),
             parent_id: parent_id.to_owned(),
@@ -1322,6 +1336,7 @@ fn edit_updates_title_and_source_and_validates() {
 
     let edited = project
         .edit(EditItem {
+            tier: None,
             item_id: item.id.clone(),
             title: Some("New title".to_owned()),
             source_ref: Some("README.md#x".to_owned()),
@@ -1334,6 +1349,7 @@ fn edit_updates_title_and_source_and_validates() {
     assert!(matches!(
         project
             .edit(EditItem {
+                tier: None,
                 item_id: item.id.clone(),
                 title: None,
                 source_ref: None,
@@ -1345,6 +1361,7 @@ fn edit_updates_title_and_source_and_validates() {
     assert!(matches!(
         project
             .edit(EditItem {
+                tier: None,
                 item_id: item.id.clone(),
                 title: Some("   ".to_owned()),
                 source_ref: None,
@@ -1357,6 +1374,7 @@ fn edit_updates_title_and_source_and_validates() {
     // Editing the root (renaming the project) is allowed — not a reserved-node op.
     project
         .edit(EditItem {
+            tier: None,
             item_id: ROOT_ID.to_owned(),
             title: Some("Renamed".to_owned()),
             source_ref: None,
@@ -1657,4 +1675,273 @@ fn migration_settles_legacy_claimed_status_to_ready() {
             .status,
         Status::Ready
     );
+}
+
+// ---- PR3: tier + body, inbox, capture ----
+
+fn inbox(project: &RumbProject) -> Item {
+    let conn = Connection::open(project.state_file()).unwrap();
+    let id: String = conn
+        .query_row("SELECT value FROM meta WHERE key = 'inbox_id'", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    project
+        .list_items()
+        .unwrap()
+        .into_iter()
+        .find(|item| item.id == id)
+        .unwrap()
+}
+
+#[test]
+fn init_seeds_inbox_as_numeric_child_of_root() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = init_project(dir.path());
+
+    let inbox = inbox(&project);
+    assert_eq!(inbox.id, "RUMB-0001");
+    assert_eq!(inbox.kind, "inbox");
+    assert_eq!(inbox.parent_id.as_deref(), Some(ROOT_ID));
+    assert_eq!(inbox.tier, Tier::Standard);
+    // Numeric id so the existing `normalize_item_id` can resolve it.
+    assert_eq!(project.item_details("1").unwrap().item.id, inbox.id);
+}
+
+#[test]
+fn inbox_is_never_ready() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = init_project(dir.path());
+    let inbox = inbox(&project);
+
+    assert!(project
+        .ready_items()
+        .unwrap()
+        .iter()
+        .all(|item| item.id != inbox.id));
+}
+
+#[test]
+fn grooming_verbs_reject_the_inbox() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = init_project(dir.path());
+    let inbox = inbox(&project);
+    let other = create_ready_item(&project, ROOT_ID, "Other");
+
+    assert!(matches!(
+        project
+            .reparent(Reparent {
+                item_id: inbox.id.clone(),
+                new_parent_id: other.id.clone(),
+                actor: "operator".to_owned(),
+                confirm: true,
+            })
+            .unwrap_err(),
+        RumbError::ReservedNode(_)
+    ));
+    assert!(matches!(
+        project
+            .recast(Recast {
+                item_id: inbox.id.clone(),
+                kind: "note".to_owned(),
+                actor: "operator".to_owned(),
+            })
+            .unwrap_err(),
+        RumbError::ReservedNode(_)
+    ));
+    assert!(matches!(
+        project
+            .merge(Merge {
+                from_id: inbox.id,
+                into_id: other.id,
+                actor: "operator".to_owned(),
+            })
+            .unwrap_err(),
+        RumbError::ReservedNode(_)
+    ));
+}
+
+#[test]
+fn capture_drops_a_draft_note_into_the_inbox() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = init_project(dir.path());
+    let inbox = inbox(&project);
+
+    let note = project
+        .capture(Capture {
+            text: "  Look into\tthe   flaky\nauth test  ".to_owned(),
+        })
+        .unwrap();
+
+    assert_eq!(note.kind, "note");
+    assert_eq!(note.status, Status::Draft);
+    assert_eq!(note.tier, Tier::Standard);
+    assert_eq!(note.parent_id.as_deref(), Some(inbox.id.as_str()));
+    assert_eq!(note.title, "Look into the flaky auth test");
+    assert_eq!(
+        note.body.as_deref(),
+        Some("  Look into\tthe   flaky\nauth test  ")
+    );
+
+    // Draft captures never appear in `ready`.
+    assert!(project
+        .ready_items()
+        .unwrap()
+        .iter()
+        .all(|item| item.id != note.id));
+
+    // The capture is an undoable changeset.
+    let conn = Connection::open(project.state_file()).unwrap();
+    let undoable: bool = conn
+        .query_row(
+            "SELECT undoable FROM changesets WHERE object_id = ? AND verb = 'item.capture'",
+            params![&note.id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(undoable);
+}
+
+#[test]
+fn capture_rejects_empty_text() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = init_project(dir.path());
+
+    assert!(matches!(
+        project
+            .capture(Capture {
+                text: "   \n\t ".to_owned(),
+            })
+            .unwrap_err(),
+        RumbError::EmptyTitle
+    ));
+}
+
+#[test]
+fn capture_then_groom_out_of_the_inbox() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = init_project(dir.path());
+    let home = create_ready_item(&project, ROOT_ID, "Home");
+
+    let note = project
+        .capture(Capture {
+            text: "groom me".to_owned(),
+        })
+        .unwrap();
+    // A captured note can be filed under a real parent (the capture -> groom loop).
+    let moved = project
+        .reparent(Reparent {
+            item_id: note.id.clone(),
+            new_parent_id: home.id.clone(),
+            actor: "operator".to_owned(),
+            confirm: false,
+        })
+        .unwrap();
+    assert_eq!(moved.parent_id.as_deref(), Some(home.id.as_str()));
+}
+
+#[test]
+fn tier_is_set_on_create_and_edited() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = init_project(dir.path());
+
+    let item = project
+        .create_item(CreateItem {
+            kind: "feature".to_owned(),
+            title: "Weighted".to_owned(),
+            parent_id: ROOT_ID.to_owned(),
+            status: Status::Ready,
+            tier: Tier::Hard,
+            source_ref: None,
+        })
+        .unwrap();
+    assert_eq!(item.tier, Tier::Hard);
+
+    let edited = project
+        .edit(EditItem {
+            item_id: item.id.clone(),
+            title: None,
+            source_ref: None,
+            tier: Some(Tier::Routine),
+            actor: "operator".to_owned(),
+        })
+        .unwrap();
+    assert_eq!(edited.tier, Tier::Routine);
+}
+
+#[test]
+fn item_delta_carries_tier_and_body() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = init_project(dir.path());
+    let note = project
+        .capture(Capture {
+            text: "delta me".to_owned(),
+        })
+        .unwrap();
+
+    let conn = Connection::open(project.state_file()).unwrap();
+    let after: String = conn
+        .query_row(
+            r"
+            SELECT d.after_json
+            FROM deltas d JOIN changesets c ON d.changeset_seq = c.seq
+            WHERE c.object_id = ? AND c.verb = 'item.capture'
+            ",
+            params![&note.id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(after.contains("\"tier\":\"standard\""));
+    assert!(after.contains("\"body\":\"delta me\""));
+}
+
+#[test]
+fn migration_six_applies_once_without_duplicating_inbox() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = init_project(dir.path());
+    // Reopen several times; migration 6 must not re-run and the inbox must not duplicate.
+    let _ = project.list_items().unwrap();
+    let _ = project.list_items().unwrap();
+
+    let conn = Connection::open(project.state_file()).unwrap();
+    let migration_six: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM migrations WHERE version = 6",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(migration_six, 1);
+    let inbox_rows: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM items WHERE kind = 'inbox'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(inbox_rows, 1);
+}
+
+#[test]
+fn migration_six_seeds_inbox_on_existing_repo() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = init_project(dir.path());
+
+    // Simulate an existing repo that has a root but predates the inbox: drop the
+    // inbox item, its meta pointer, and the migration-6 marker. Reopening must
+    // re-run migration 6 and seed the inbox via the migration path (not init).
+    let conn = Connection::open(project.state_file()).unwrap();
+    conn.execute("DELETE FROM items WHERE kind = 'inbox'", [])
+        .unwrap();
+    conn.execute("DELETE FROM meta WHERE key = 'inbox_id'", [])
+        .unwrap();
+    conn.execute("DELETE FROM migrations WHERE version = 6", [])
+        .unwrap();
+    drop(conn);
+
+    let _ = project.list_items().unwrap();
+
+    let inbox = inbox(&project);
+    assert_eq!(inbox.kind, "inbox");
+    assert_eq!(inbox.parent_id.as_deref(), Some(ROOT_ID));
 }

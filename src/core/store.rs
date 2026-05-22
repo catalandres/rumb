@@ -17,7 +17,9 @@ pub(crate) struct DbItem {
     kind: String,
     title: String,
     status: String,
+    tier: String,
     source_ref: Option<String>,
+    body: Option<String>,
     created_at: i64,
     updated_at: i64,
 }
@@ -216,7 +218,7 @@ pub(crate) fn ensure_schema(conn: &mut Connection) -> Result<(), RumbError> {
             FROM changesets;
             ",
         )?;
-        let snapshot = snapshot_json(&tx)?;
+        let snapshot = genesis_snapshot(&tx)?;
         let genesis_seq: i64 =
             tx.query_row("SELECT COALESCE(MAX(seq), 0) FROM changesets", [], |row| {
                 row.get(0)
@@ -241,6 +243,31 @@ pub(crate) fn ensure_schema(conn: &mut Connection) -> Result<(), RumbError> {
             params![5, "drop_claimed_status", timestamp() as i64],
         )?;
     }
+
+    if !applied.contains(&6) {
+        // Work-weight (`tier`) on every item, free-text `body` for captured notes, and a
+        // key/value `meta` table. Seed the inbox here for repos that already have a root;
+        // fresh repos get it from `init` after root creation (see `ensure_inbox`).
+        // DuckDB does not allow NOT NULL on ADD COLUMN, so `tier` is nullable at the
+        // schema level; the DEFAULT backfills existing rows and `insert_item` always
+        // writes a value, so it is never null in practice.
+        tx.execute_batch(
+            r"
+            ALTER TABLE items ADD COLUMN IF NOT EXISTS tier TEXT DEFAULT 'standard';
+            ALTER TABLE items ADD COLUMN IF NOT EXISTS body TEXT;
+
+            CREATE TABLE IF NOT EXISTS meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+            ",
+        )?;
+        ensure_inbox(&tx, timestamp())?;
+        tx.execute(
+            "INSERT INTO migrations (version, name, applied_at) VALUES (?, ?, ?)",
+            params![6, "tier_body_inbox", timestamp() as i64],
+        )?;
+    }
     tx.commit()?;
 
     Ok(())
@@ -257,7 +284,9 @@ pub(crate) fn item_row_value(item: &Item) -> serde_json::Value {
         "kind": item.kind,
         "title": item.title,
         "status": item.status.to_string(),
+        "tier": item.tier.to_string(),
         "source_ref": item.source_ref,
+        "body": item.body,
         "created_at": item.created_at,
         "updated_at": item.updated_at,
     })
@@ -272,8 +301,31 @@ pub(crate) fn edge_row_value(edge: &Edge) -> serde_json::Value {
     })
 }
 
-pub(crate) fn snapshot_json(conn: &Connection) -> Result<String, RumbError> {
-    let items: Vec<serde_json::Value> = load_items(conn)?.iter().map(item_row_value).collect();
+/// Genesis snapshot frozen to the migration-4 item schema. It is captured inside
+/// migration 4, before later migrations add columns (tier/body in migration 6), so
+/// it must serialize only columns that existed then — it cannot go through the
+/// evolving `load_items`/`item_row_value`, which now select tier/body.
+fn genesis_snapshot(conn: &Connection) -> Result<String, RumbError> {
+    let mut stmt = conn.prepare(
+        "SELECT id, parent_id, kind, title, status, source_ref, created_at, updated_at \
+         FROM items ORDER BY id",
+    )?;
+    let items = stmt
+        .query_map([], |row| {
+            let parent_id: Option<String> = row.get(1)?;
+            let source_ref: Option<String> = row.get(5)?;
+            Ok(json!({
+                "id": row.get::<_, String>(0)?,
+                "parent_id": parent_id,
+                "kind": row.get::<_, String>(2)?,
+                "title": row.get::<_, String>(3)?,
+                "status": row.get::<_, String>(4)?,
+                "source_ref": source_ref,
+                "created_at": row.get::<_, i64>(6)?,
+                "updated_at": row.get::<_, i64>(7)?,
+            }))
+        })?
+        .collect::<duckdb::Result<Vec<_>>>()?;
     let edges: Vec<serde_json::Value> = load_edges(conn)?.iter().map(edge_row_value).collect();
     Ok(json!({ "items": items, "edges": edges }).to_string())
 }
@@ -298,20 +350,21 @@ pub(crate) fn item_exists(conn: &Connection, id: &str) -> Result<bool, RumbError
 }
 
 pub(crate) fn insert_item(conn: &Connection, item: &Item) -> Result<(), RumbError> {
-    let status = item.status.to_string();
     conn.execute(
         r"
         INSERT INTO items (
-            id, parent_id, kind, title, status, source_ref, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            id, parent_id, kind, title, status, tier, source_ref, body, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ",
         params![
             &item.id,
             item.parent_id.as_deref(),
             &item.kind,
             &item.title,
-            &status,
+            item.status.to_string(),
+            item.tier.to_string(),
             item.source_ref.as_deref(),
+            item.body.as_deref(),
             item.created_at as i64,
             item.updated_at as i64,
         ],
@@ -331,26 +384,27 @@ pub(crate) fn insert_edge(conn: &Connection, edge: &Edge) -> Result<(), RumbErro
     Ok(())
 }
 
+const ITEM_COLUMNS: &str =
+    "id, parent_id, kind, title, status, tier, source_ref, body, created_at, updated_at";
+
+fn map_item_row(row: &duckdb::Row<'_>) -> duckdb::Result<DbItem> {
+    Ok(DbItem {
+        id: row.get(0)?,
+        parent_id: row.get(1)?,
+        kind: row.get(2)?,
+        title: row.get(3)?,
+        status: row.get(4)?,
+        tier: row.get(5)?,
+        source_ref: row.get(6)?,
+        body: row.get(7)?,
+        created_at: row.get(8)?,
+        updated_at: row.get(9)?,
+    })
+}
+
 pub(crate) fn load_item(conn: &Connection, id: &str) -> Result<Option<Item>, RumbError> {
-    let mut stmt = conn.prepare(
-        r"
-        SELECT id, parent_id, kind, title, status, source_ref, created_at, updated_at
-        FROM items
-        WHERE id = ?
-        ",
-    )?;
-    let mut rows = stmt.query_map(params![id], |row| {
-        Ok(DbItem {
-            id: row.get(0)?,
-            parent_id: row.get(1)?,
-            kind: row.get(2)?,
-            title: row.get(3)?,
-            status: row.get(4)?,
-            source_ref: row.get(5)?,
-            created_at: row.get(6)?,
-            updated_at: row.get(7)?,
-        })
-    })?;
+    let mut stmt = conn.prepare(&format!("SELECT {ITEM_COLUMNS} FROM items WHERE id = ?"))?;
+    let mut rows = stmt.query_map(params![id], map_item_row)?;
     rows.next().transpose()?.map(item_from_db).transpose()
 }
 
@@ -376,7 +430,8 @@ pub(crate) fn update_item_row(conn: &Connection, item: &Item) -> Result<(), Rumb
     let changed = conn.execute(
         r"
         UPDATE items
-        SET parent_id = ?, kind = ?, title = ?, status = ?, source_ref = ?, updated_at = ?
+        SET parent_id = ?, kind = ?, title = ?, status = ?, tier = ?,
+            source_ref = ?, body = ?, updated_at = ?
         WHERE id = ?
         ",
         params![
@@ -384,7 +439,9 @@ pub(crate) fn update_item_row(conn: &Connection, item: &Item) -> Result<(), Rumb
             &item.kind,
             &item.title,
             item.status.to_string(),
+            item.tier.to_string(),
             item.source_ref.as_deref(),
+            item.body.as_deref(),
             item.updated_at as i64,
             &item.id,
         ],
@@ -395,8 +452,69 @@ pub(crate) fn update_item_row(conn: &Connection, item: &Item) -> Result<(), Rumb
     Ok(())
 }
 
-pub(crate) fn is_reserved_node(id: &str) -> bool {
-    id == ROOT_ID
+pub(crate) fn meta_get(conn: &Connection, key: &str) -> Result<Option<String>, RumbError> {
+    let mut stmt = conn.prepare("SELECT value FROM meta WHERE key = ?")?;
+    let mut rows = stmt.query_map(params![key], |row| row.get::<_, String>(0))?;
+    Ok(rows.next().transpose()?)
+}
+
+pub(crate) fn meta_set(conn: &Connection, key: &str, value: &str) -> Result<(), RumbError> {
+    conn.execute(
+        r"
+        INSERT INTO meta (key, value) VALUES (?, ?)
+        ON CONFLICT (key) DO UPDATE SET value = excluded.value
+        ",
+        params![key, value],
+    )?;
+    Ok(())
+}
+
+pub(crate) fn inbox_id(conn: &Connection) -> Result<Option<String>, RumbError> {
+    meta_get(conn, META_INBOX_ID)
+}
+
+/// Reserved nodes (root + inbox) are structural infrastructure: they cannot be
+/// groomed and never appear in `ready`.
+pub(crate) fn is_reserved_node(conn: &Connection, id: &str) -> Result<bool, RumbError> {
+    Ok(id == ROOT_ID || inbox_id(conn)?.as_deref() == Some(id))
+}
+
+pub(crate) fn reserved_node_ids(conn: &Connection) -> Result<HashSet<String>, RumbError> {
+    let mut ids = HashSet::new();
+    ids.insert(ROOT_ID.to_owned());
+    if let Some(inbox) = inbox_id(conn)? {
+        ids.insert(inbox);
+    }
+    Ok(ids)
+}
+
+/// Idempotently seed the inbox node. Returns the inbox id when present or just
+/// created; `None` only when root does not yet exist (fresh repo, mid-migration —
+/// `init` seeds it after creating root). Raw insert (not delta-captured): the inbox
+/// is structural infrastructure, not changeset history.
+pub(crate) fn ensure_inbox(conn: &Connection, now: u64) -> Result<Option<String>, RumbError> {
+    if let Some(existing) = inbox_id(conn)? {
+        return Ok(Some(existing));
+    }
+    if !item_exists(conn, ROOT_ID)? {
+        return Ok(None);
+    }
+    let id = next_item_id(conn)?;
+    let inbox = Item {
+        id: id.clone(),
+        parent_id: Some(ROOT_ID.to_owned()),
+        kind: "inbox".to_owned(),
+        title: "Inbox".to_owned(),
+        status: Status::Ready,
+        tier: Tier::Standard,
+        source_ref: None,
+        body: None,
+        created_at: now,
+        updated_at: now,
+    };
+    insert_item(conn, &inbox)?;
+    meta_set(conn, META_INBOX_ID, &id)?;
+    Ok(Some(id))
 }
 
 pub(crate) fn insert_claim(conn: &Connection, claim: &Claim) -> Result<(), RumbError> {
@@ -708,26 +826,8 @@ pub(crate) fn next_item_id(conn: &Connection) -> Result<String, RumbError> {
 
 pub(crate) fn load_items(conn: &Connection) -> Result<Vec<Item>, RumbError> {
     let mut items = Vec::new();
-    let mut stmt = conn.prepare(
-        r"
-        SELECT id, parent_id, kind, title, status, source_ref, created_at, updated_at
-        FROM items
-        ORDER BY id
-        ",
-    )?;
-    let rows = stmt.query_map([], |row| {
-        Ok(DbItem {
-            id: row.get(0)?,
-            parent_id: row.get(1)?,
-            kind: row.get(2)?,
-            title: row.get(3)?,
-            status: row.get(4)?,
-            source_ref: row.get(5)?,
-            created_at: row.get(6)?,
-            updated_at: row.get(7)?,
-        })
-    })?;
-
+    let mut stmt = conn.prepare(&format!("SELECT {ITEM_COLUMNS} FROM items ORDER BY id"))?;
+    let rows = stmt.query_map([], map_item_row)?;
     for row in rows {
         items.push(item_from_db(row?)?);
     }
@@ -802,7 +902,9 @@ pub(crate) fn item_from_db(item: DbItem) -> Result<Item, RumbError> {
         kind: item.kind,
         title: item.title,
         status: item.status.parse()?,
+        tier: item.tier.parse()?,
         source_ref: item.source_ref,
+        body: item.body,
         created_at: stored_timestamp(item.created_at)?,
         updated_at: stored_timestamp(item.updated_at)?,
     })

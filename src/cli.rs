@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
-use crate::core::{EdgeKind, Status};
+use crate::core::{EdgeKind, Status, Tier};
 
 #[derive(Debug, Parser)]
 #[command(name = "rumb", version, about = "Local agent work coordinator")]
@@ -86,6 +86,8 @@ pub enum Command {
         #[arg(long)]
         source: Option<String>,
         #[arg(long)]
+        tier: Option<Tier>,
+        #[arg(long)]
         actor: String,
     },
     Recast {
@@ -110,6 +112,9 @@ pub enum Command {
         #[arg(long)]
         actor: String,
     },
+    Capture {
+        text: String,
+    },
     Mcp {
         #[command(subcommand)]
         command: McpCommand,
@@ -130,6 +135,8 @@ pub enum ItemCommand {
         parent: String,
         #[arg(long, default_value_t = Status::Draft)]
         status: Status,
+        #[arg(long, default_value_t = Tier::Standard)]
+        tier: Tier,
         #[arg(long)]
         source: Option<String>,
     },
@@ -176,7 +183,7 @@ mod tests {
     use clap::Parser;
 
     use super::{Cli, Command, EdgeCommand, ItemCommand, McpCommand, ViewCommand};
-    use crate::core::{EdgeKind, Status};
+    use crate::core::{EdgeKind, Status, Tier};
 
     #[test]
     fn parses_item_create_with_defaults() {
@@ -200,6 +207,7 @@ mod tests {
                         title,
                         parent,
                         status,
+                        tier,
                         source,
                     },
             } => {
@@ -207,6 +215,7 @@ mod tests {
                 assert_eq!(title, "Claim flow");
                 assert_eq!(parent, "RUMB-0000");
                 assert_eq!(status, Status::Draft);
+                assert_eq!(tier, Tier::Standard);
                 assert_eq!(source, None);
             }
             other => panic!("unexpected command: {other:?}"),
@@ -372,11 +381,13 @@ mod tests {
                 id,
                 title,
                 source,
+                tier,
                 actor,
             } => {
                 assert_eq!(id, "RUMB-0002");
                 assert_eq!(title.as_deref(), Some("New title"));
                 assert_eq!(source, None);
+                assert_eq!(tier, None);
                 assert_eq!(actor, "operator");
             }
             other => panic!("unexpected command: {other:?}"),
@@ -430,6 +441,40 @@ mod tests {
                 assert_eq!(kind, EdgeKind::DependsOn);
                 assert_eq!(actor, "operator");
             }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_item_create_with_tier() {
+        let cli = Cli::parse_from([
+            "rumb",
+            "item",
+            "create",
+            "--kind",
+            "feature",
+            "--title",
+            "T",
+            "--parent",
+            "RUMB-0000",
+            "--tier",
+            "hard",
+        ]);
+
+        match cli.command {
+            Command::Item {
+                command: ItemCommand::Create { tier, .. },
+            } => assert_eq!(tier, Tier::Hard),
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_capture() {
+        let cli = Cli::parse_from(["rumb", "capture", "a quick thought"]);
+
+        match cli.command {
+            Command::Capture { text } => assert_eq!(text, "a quick thought"),
             other => panic!("unexpected command: {other:?}"),
         }
     }
