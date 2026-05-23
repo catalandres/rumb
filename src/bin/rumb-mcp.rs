@@ -11,10 +11,10 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use rumb::{
-    default_ttl_seconds, parse_ttl, AddEdge, Capture, Claim, ClaimItem, CreateItem, DoneItem, Edge,
-    EdgeKind, EditItem, Event, InitOptions, Item, Merge, MergeOutcome, Recast, ReleaseClaim,
-    RenewClaim, Reparent, ReviewItem, RumbError, RumbProject, RunCommand, RunRecord, Status, Tier,
-    Unlink, UnlinkOutcome, UpdateItemStatus,
+    default_ttl_seconds, parse_ttl, AddEdge, Capture, Claim, ClaimItem, CreateItem, Digest,
+    DoneItem, Edge, EdgeKind, EditItem, Event, GroomNote, InitOptions, Item, Merge, MergeOutcome,
+    Recast, ReleaseClaim, RenewClaim, Reparent, ReviewItem, RumbError, RumbProject, RunCommand,
+    RunRecord, Status, Tier, Unlink, UnlinkOutcome, UpdateItemStatus,
 };
 
 #[derive(Debug, Parser)]
@@ -246,6 +246,10 @@ impl RumbMcp {
                 new_parent_id: args.under,
                 actor: args.actor,
                 confirm: args.confirm.unwrap_or(false),
+                note: GroomNote {
+                    rejected: args.rejected,
+                    why: args.why,
+                },
             })
             .map_err(to_mcp_error)?;
         Ok(structured(item_json(&item)))
@@ -265,6 +269,10 @@ impl RumbMcp {
                 source_ref: args.source,
                 tier,
                 actor: args.actor,
+                note: GroomNote {
+                    rejected: args.rejected,
+                    why: args.why,
+                },
             })
             .map_err(to_mcp_error)?;
         Ok(structured(item_json(&item)))
@@ -281,6 +289,10 @@ impl RumbMcp {
                 item_id: args.id,
                 kind: args.kind,
                 actor: args.actor,
+                note: GroomNote {
+                    rejected: args.rejected,
+                    why: args.why,
+                },
             })
             .map_err(to_mcp_error)?;
         Ok(structured(item_json(&item)))
@@ -299,6 +311,10 @@ impl RumbMcp {
                 to: args.to,
                 kind,
                 actor: args.actor,
+                note: GroomNote {
+                    rejected: args.rejected,
+                    why: args.why,
+                },
             })
             .map_err(to_mcp_error)?;
         Ok(structured(unlink_json(&outcome)))
@@ -315,6 +331,10 @@ impl RumbMcp {
                 from_id: args.from,
                 into_id: args.into,
                 actor: args.actor,
+                note: GroomNote {
+                    rejected: args.rejected,
+                    why: args.why,
+                },
             })
             .map_err(to_mcp_error)?;
         Ok(structured(merge_json(&outcome)))
@@ -330,6 +350,35 @@ impl RumbMcp {
             .capture(Capture { text: args.text })
             .map_err(to_mcp_error)?;
         Ok(structured(item_json(&item)))
+    }
+
+    #[tool(description = "Compute the rumb digest: spirals, threads, stale inbox, momentum")]
+    async fn digest(&self) -> Result<CallToolResult, ErrorData> {
+        let project = self.project()?;
+        let digest = project.digest().map_err(to_mcp_error)?;
+        Ok(structured(digest_json(&digest)))
+    }
+
+    #[tool(description = "Reverse the most recent undoable rumb change")]
+    async fn undo(&self) -> Result<CallToolResult, ErrorData> {
+        let project = self.project()?;
+        let outcome = project.undo().map_err(to_mcp_error)?;
+        Ok(structured(json!({
+            "seq": outcome.seq,
+            "verb": outcome.verb,
+            "object_id": outcome.object_id,
+        })))
+    }
+
+    #[tool(description = "Reproduce the rumb graph as it stood at a past changeset seq")]
+    async fn at(&self, Parameters(args): Parameters<AtArgs>) -> Result<CallToolResult, ErrorData> {
+        let project = self.project()?;
+        let graph = project.at(args.seq).map_err(to_mcp_error)?;
+        Ok(structured(json!({
+            "seq": graph.seq,
+            "items": graph.items.iter().map(item_json).collect::<Vec<_>>(),
+            "edges": graph.edges.iter().map(edge_json).collect::<Vec<_>>(),
+        })))
     }
 
     #[tool(description = "List rumb events, optionally scoped to one item")]
@@ -425,6 +474,8 @@ struct ReparentArgs {
     under: String,
     actor: String,
     confirm: Option<bool>,
+    rejected: Option<String>,
+    why: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -434,6 +485,8 @@ struct EditArgs {
     source: Option<String>,
     tier: Option<String>,
     actor: String,
+    rejected: Option<String>,
+    why: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -446,6 +499,8 @@ struct RecastArgs {
     id: String,
     kind: String,
     actor: String,
+    rejected: Option<String>,
+    why: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -454,6 +509,8 @@ struct UnlinkArgs {
     to: String,
     kind: String,
     actor: String,
+    rejected: Option<String>,
+    why: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -461,6 +518,13 @@ struct MergeArgs {
     from: String,
     into: String,
     actor: String,
+    rejected: Option<String>,
+    why: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct AtArgs {
+    seq: i64,
 }
 
 #[tokio::main]
@@ -508,6 +572,24 @@ fn claim_json(claim: &Claim) -> Value {
         "branch": claim.branch,
         "worktree_path": claim.worktree_path,
         "lease_until": claim.lease_until,
+    })
+}
+
+fn digest_json(digest: &Digest) -> Value {
+    json!({
+        "spirals": digest.spirals.iter().map(|spiral| json!({
+            "item": item_json(&spiral.item),
+            "failed_runs": spiral.failed_runs,
+        })).collect::<Vec<_>>(),
+        "threads": digest.threads.iter().map(|thread| json!({
+            "title": thread.title,
+            "item_ids": thread.item_ids,
+        })).collect::<Vec<_>>(),
+        "stale_inbox": digest.stale_inbox.iter().map(item_json).collect::<Vec<_>>(),
+        "momentum": digest.momentum.iter().map(|m| json!({
+            "kind": m.kind,
+            "count": m.count,
+        })).collect::<Vec<_>>(),
     })
 }
 

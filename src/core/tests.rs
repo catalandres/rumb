@@ -1218,6 +1218,7 @@ fn reparent_moves_item_and_records_undoable_changeset() {
 
     let moved = project
         .reparent(Reparent {
+            note: GroomNote::default(),
             item_id: child.id.clone(),
             new_parent_id: b.id.clone(),
             actor: "operator".to_owned(),
@@ -1246,6 +1247,7 @@ fn reparent_rejects_cycle() {
 
     let err = project
         .reparent(Reparent {
+            note: GroomNote::default(),
             item_id: a.id.clone(),
             new_parent_id: b.id.clone(),
             actor: "operator".to_owned(),
@@ -1264,6 +1266,7 @@ fn reparent_to_root_requires_confirm() {
 
     let err = project
         .reparent(Reparent {
+            note: GroomNote::default(),
             item_id: b.id.clone(),
             new_parent_id: ROOT_ID.to_owned(),
             actor: "operator".to_owned(),
@@ -1274,6 +1277,7 @@ fn reparent_to_root_requires_confirm() {
 
     let moved = project
         .reparent(Reparent {
+            note: GroomNote::default(),
             item_id: b.id.clone(),
             new_parent_id: ROOT_ID.to_owned(),
             actor: "operator".to_owned(),
@@ -1291,6 +1295,7 @@ fn reparent_rejects_reserved_node() {
 
     let err = project
         .reparent(Reparent {
+            note: GroomNote::default(),
             item_id: ROOT_ID.to_owned(),
             new_parent_id: a.id,
             actor: "operator".to_owned(),
@@ -1319,6 +1324,7 @@ fn reparent_blocked_by_active_claim() {
 
     let err = project
         .reparent(Reparent {
+            note: GroomNote::default(),
             item_id: child.id.clone(),
             new_parent_id: other.id,
             actor: "operator".to_owned(),
@@ -1336,6 +1342,7 @@ fn edit_updates_title_and_source_and_validates() {
 
     let edited = project
         .edit(EditItem {
+            note: GroomNote::default(),
             tier: None,
             item_id: item.id.clone(),
             title: Some("New title".to_owned()),
@@ -1349,6 +1356,7 @@ fn edit_updates_title_and_source_and_validates() {
     assert!(matches!(
         project
             .edit(EditItem {
+                note: GroomNote::default(),
                 tier: None,
                 item_id: item.id.clone(),
                 title: None,
@@ -1361,6 +1369,7 @@ fn edit_updates_title_and_source_and_validates() {
     assert!(matches!(
         project
             .edit(EditItem {
+                note: GroomNote::default(),
                 tier: None,
                 item_id: item.id.clone(),
                 title: Some("   ".to_owned()),
@@ -1374,6 +1383,7 @@ fn edit_updates_title_and_source_and_validates() {
     // Editing the root (renaming the project) is allowed — not a reserved-node op.
     project
         .edit(EditItem {
+            note: GroomNote::default(),
             tier: None,
             item_id: ROOT_ID.to_owned(),
             title: Some("Renamed".to_owned()),
@@ -1391,6 +1401,7 @@ fn recast_changes_kind_and_guards() {
 
     let recast = project
         .recast(Recast {
+            note: GroomNote::default(),
             item_id: item.id.clone(),
             kind: "spec".to_owned(),
             actor: "operator".to_owned(),
@@ -1401,6 +1412,7 @@ fn recast_changes_kind_and_guards() {
     assert!(matches!(
         project
             .recast(Recast {
+                note: GroomNote::default(),
                 item_id: item.id.clone(),
                 kind: "  ".to_owned(),
                 actor: "operator".to_owned(),
@@ -1411,6 +1423,7 @@ fn recast_changes_kind_and_guards() {
     assert!(matches!(
         project
             .recast(Recast {
+                note: GroomNote::default(),
                 item_id: ROOT_ID.to_owned(),
                 kind: "spec".to_owned(),
                 actor: "operator".to_owned(),
@@ -1443,6 +1456,7 @@ fn unlink_removes_edge_and_surfaces_newly_ready() {
 
     let outcome = project
         .unlink(Unlink {
+            note: GroomNote::default(),
             from: waiter.id.clone(),
             to: blocker.id.clone(),
             kind: EdgeKind::DependsOn,
@@ -1458,6 +1472,7 @@ fn unlink_removes_edge_and_surfaces_newly_ready() {
     assert!(matches!(
         project
             .unlink(Unlink {
+                note: GroomNote::default(),
                 from: waiter.id,
                 to: blocker.id,
                 kind: EdgeKind::DependsOn,
@@ -1492,6 +1507,7 @@ fn merge_moves_children_rewires_edges_and_supersedes() {
 
     let outcome = project
         .merge(Merge {
+            note: GroomNote::default(),
             from_id: a.id.clone(),
             into_id: b.id.clone(),
             actor: "operator".to_owned(),
@@ -1537,6 +1553,7 @@ fn merge_rejects_self_reserved_and_cycle() {
     assert!(matches!(
         project
             .merge(Merge {
+                note: GroomNote::default(),
                 from_id: a.id.clone(),
                 into_id: a.id.clone(),
                 actor: "operator".to_owned(),
@@ -1547,6 +1564,7 @@ fn merge_rejects_self_reserved_and_cycle() {
     assert!(matches!(
         project
             .merge(Merge {
+                note: GroomNote::default(),
                 from_id: ROOT_ID.to_owned(),
                 into_id: a.id.clone(),
                 actor: "operator".to_owned(),
@@ -1558,6 +1576,7 @@ fn merge_rejects_self_reserved_and_cycle() {
     assert!(matches!(
         project
             .merge(Merge {
+                note: GroomNote::default(),
                 from_id: a.id,
                 into_id: child.id,
                 actor: "operator".to_owned(),
@@ -1586,6 +1605,7 @@ fn merge_blocked_by_active_claim() {
 
     let err = project
         .merge(Merge {
+            note: GroomNote::default(),
             from_id: child.id,
             into_id: into.id,
             actor: "operator".to_owned(),
@@ -1731,6 +1751,7 @@ fn grooming_verbs_reject_the_inbox() {
     assert!(matches!(
         project
             .reparent(Reparent {
+                note: GroomNote::default(),
                 item_id: inbox.id.clone(),
                 new_parent_id: other.id.clone(),
                 actor: "operator".to_owned(),
@@ -1742,6 +1763,7 @@ fn grooming_verbs_reject_the_inbox() {
     assert!(matches!(
         project
             .recast(Recast {
+                note: GroomNote::default(),
                 item_id: inbox.id.clone(),
                 kind: "note".to_owned(),
                 actor: "operator".to_owned(),
@@ -1752,6 +1774,7 @@ fn grooming_verbs_reject_the_inbox() {
     assert!(matches!(
         project
             .merge(Merge {
+                note: GroomNote::default(),
                 from_id: inbox.id,
                 into_id: other.id,
                 actor: "operator".to_owned(),
@@ -1831,6 +1854,7 @@ fn capture_then_groom_out_of_the_inbox() {
     // A captured note can be filed under a real parent (the capture -> groom loop).
     let moved = project
         .reparent(Reparent {
+            note: GroomNote::default(),
             item_id: note.id.clone(),
             new_parent_id: home.id.clone(),
             actor: "operator".to_owned(),
@@ -1859,6 +1883,7 @@ fn tier_is_set_on_create_and_edited() {
 
     let edited = project
         .edit(EditItem {
+            note: GroomNote::default(),
             item_id: item.id.clone(),
             title: None,
             source_ref: None,
@@ -1945,4 +1970,323 @@ fn migration_six_seeds_inbox_on_existing_repo() {
     assert_eq!(inbox.kind, "inbox");
     assert_eq!(inbox.parent_id.as_deref(), Some(ROOT_ID));
     assert_eq!(inbox.tier, Tier::Standard);
+}
+
+// ---- PR4: undo, at, digest, rejected-alternatives ----
+
+fn item_parent(project: &RumbProject, id: &str) -> Option<String> {
+    project
+        .list_items()
+        .unwrap()
+        .into_iter()
+        .find(|item| item.id == id)
+        .and_then(|item| item.parent_id)
+}
+
+fn reparent(project: &RumbProject, item_id: &str, under: &str) {
+    project
+        .reparent(Reparent {
+            item_id: item_id.to_owned(),
+            new_parent_id: under.to_owned(),
+            actor: "operator".to_owned(),
+            confirm: false,
+            note: GroomNote::default(),
+        })
+        .unwrap();
+}
+
+#[test]
+fn undo_reverses_a_reparent() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = init_project(dir.path());
+    let a = create_ready_item(&project, ROOT_ID, "A");
+    let b = create_ready_item(&project, ROOT_ID, "B");
+    let child = create_ready_item(&project, &a.id, "Child");
+
+    reparent(&project, &child.id, &b.id);
+    assert_eq!(
+        item_parent(&project, &child.id).as_deref(),
+        Some(b.id.as_str())
+    );
+
+    let outcome = project.undo().unwrap();
+    assert_eq!(outcome.verb, "item.reparent");
+    assert_eq!(
+        item_parent(&project, &child.id).as_deref(),
+        Some(a.id.as_str())
+    );
+}
+
+#[test]
+fn undo_reverses_a_capture_by_deleting_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = init_project(dir.path());
+    let note = project
+        .capture(Capture {
+            text: "undo me".to_owned(),
+        })
+        .unwrap();
+    assert!(project
+        .list_items()
+        .unwrap()
+        .iter()
+        .any(|i| i.id == note.id));
+
+    project.undo().unwrap();
+    assert!(project
+        .list_items()
+        .unwrap()
+        .iter()
+        .all(|i| i.id != note.id));
+}
+
+#[test]
+fn undo_reverses_an_unlink() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = init_project(dir.path());
+    let a = create_ready_item(&project, ROOT_ID, "A");
+    let b = create_ready_item(&project, ROOT_ID, "B");
+    project
+        .add_edge(AddEdge {
+            from: a.id.clone(),
+            to: b.id.clone(),
+            kind: EdgeKind::RelatesTo,
+        })
+        .unwrap();
+    project
+        .unlink(Unlink {
+            from: a.id.clone(),
+            to: b.id.clone(),
+            kind: EdgeKind::RelatesTo,
+            actor: "operator".to_owned(),
+            note: GroomNote::default(),
+        })
+        .unwrap();
+
+    project.undo().unwrap();
+    let conn = Connection::open(project.state_file()).unwrap();
+    assert_eq!(edge_count(&conn, &a.id, &b.id, "relates_to"), 1);
+}
+
+#[test]
+fn undo_reverses_a_merge() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = init_project(dir.path());
+    let a = create_ready_item(&project, ROOT_ID, "A");
+    let b = create_ready_item(&project, ROOT_ID, "B");
+    let child = create_ready_item(&project, &a.id, "Child");
+    project
+        .merge(Merge {
+            from_id: a.id.clone(),
+            into_id: b.id.clone(),
+            actor: "operator".to_owned(),
+            note: GroomNote::default(),
+        })
+        .unwrap();
+
+    project.undo().unwrap();
+    // Child back under A, A no longer superseded, supersedes edge gone.
+    assert_eq!(
+        item_parent(&project, &child.id).as_deref(),
+        Some(a.id.as_str())
+    );
+    let restored = project
+        .list_items()
+        .unwrap()
+        .into_iter()
+        .find(|i| i.id == a.id)
+        .unwrap();
+    assert_eq!(restored.status, Status::Ready);
+    let conn = Connection::open(project.state_file()).unwrap();
+    assert_eq!(edge_count(&conn, &b.id, &a.id, "supersedes"), 0);
+}
+
+#[test]
+fn undo_with_nothing_to_undo_errors() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = init_project(dir.path());
+    assert!(matches!(
+        project.undo().unwrap_err(),
+        RumbError::NothingToUndo
+    ));
+}
+
+#[test]
+fn undo_is_blocked_by_a_later_dependent_change() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = init_project(dir.path());
+    let a = create_ready_item(&project, ROOT_ID, "A");
+    let b = create_ready_item(&project, ROOT_ID, "B");
+    reparent(&project, &a.id, &b.id);
+    // A later (non-undoable) change references A, so the reparent can't be undone.
+    project
+        .update_item_status(UpdateItemStatus {
+            item_id: a.id.clone(),
+            status: Status::InReview,
+            actor: "operator".to_owned(),
+        })
+        .unwrap();
+
+    assert!(matches!(
+        project.undo().unwrap_err(),
+        RumbError::UndoBlocked(_)
+    ));
+}
+
+#[test]
+fn undo_twice_walks_back_two_independent_moves() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = init_project(dir.path());
+    let a = create_ready_item(&project, ROOT_ID, "A");
+    let b = create_ready_item(&project, ROOT_ID, "B");
+    let home = create_ready_item(&project, ROOT_ID, "Home");
+    reparent(&project, &a.id, &home.id);
+    reparent(&project, &b.id, &home.id);
+
+    let first = project.undo().unwrap();
+    assert_eq!(first.object_id, b.id);
+    let second = project.undo().unwrap();
+    assert_eq!(second.object_id, a.id);
+    assert_eq!(item_parent(&project, &a.id).as_deref(), Some(ROOT_ID));
+    assert_eq!(item_parent(&project, &b.id).as_deref(), Some(ROOT_ID));
+}
+
+#[test]
+fn at_reproduces_an_earlier_graph_and_rejects_out_of_range() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = init_project(dir.path());
+    let a = create_ready_item(&project, ROOT_ID, "A");
+    let seq_after_a = max_seq(&project);
+    let b = create_ready_item(&project, ROOT_ID, "B");
+
+    let early = project.at(seq_after_a).unwrap();
+    assert!(early.items.iter().any(|i| i.id == a.id));
+    assert!(early.items.iter().all(|i| i.id != b.id));
+    // The inbox is injected as infrastructure.
+    assert!(early.items.iter().any(|i| i.kind == "inbox"));
+
+    let now = project.at(max_seq(&project)).unwrap();
+    assert!(now.items.iter().any(|i| i.id == b.id));
+
+    assert!(matches!(
+        project.at(99_999).unwrap_err(),
+        RumbError::SeqOutOfRange(_)
+    ));
+}
+
+fn max_seq(project: &RumbProject) -> i64 {
+    let conn = Connection::open(project.state_file()).unwrap();
+    conn.query_row("SELECT COALESCE(MAX(seq), 0) FROM changesets", [], |row| {
+        row.get(0)
+    })
+    .unwrap()
+}
+
+#[test]
+fn digest_reports_spirals_threads_stale_and_momentum() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = init_project(dir.path());
+
+    // Spiral: three failed runs, no status movement.
+    let spiraling = create_ready_item(&project, ROOT_ID, "Flaky");
+    for _ in 0..3 {
+        project
+            .run_command(RunCommand {
+                item_id: spiraling.id.clone(),
+                actor: "operator".to_owned(),
+                command: vec!["sh".to_owned(), "-c".to_owned(), "exit 1".to_owned()],
+            })
+            .unwrap();
+    }
+
+    // Thread: two items with the same normalized title.
+    create_ready_item(&project, ROOT_ID, "Fix auth");
+    create_ready_item(&project, ROOT_ID, "fix   auth");
+
+    // Momentum kind-at-time: done a feature, then recast it to spec.
+    let shipped = create_ready_item(&project, ROOT_ID, "Shipped");
+    project
+        .done_item(DoneItem {
+            item_id: shipped.id.clone(),
+            actor: "operator".to_owned(),
+        })
+        .unwrap();
+    project
+        .recast(Recast {
+            item_id: shipped.id.clone(),
+            kind: "spec".to_owned(),
+            actor: "operator".to_owned(),
+            note: GroomNote::default(),
+        })
+        .unwrap();
+
+    let digest = project.digest().unwrap();
+    assert!(digest
+        .spirals
+        .iter()
+        .any(|s| s.item.id == spiraling.id && s.failed_runs >= 3));
+    assert!(digest
+        .threads
+        .iter()
+        .any(|t| t.title == "fix auth" && t.item_ids.len() == 2));
+    // Credits the kind at done-time (feature), not the later recast (spec).
+    assert!(digest
+        .momentum
+        .iter()
+        .any(|m| m.kind == "feature" && m.count == 1));
+    assert!(digest.momentum.iter().all(|m| m.kind != "spec"));
+}
+
+#[test]
+fn digest_flags_stale_inbox_captures() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = init_project(dir.path());
+    let note = project
+        .capture(Capture {
+            text: "old thought".to_owned(),
+        })
+        .unwrap();
+
+    // Backdate the capture's only event to 8 days ago.
+    let conn = Connection::open(project.state_file()).unwrap();
+    let stale_ts = (timestamp() - 8 * 24 * 60 * 60) as i64;
+    conn.execute(
+        "UPDATE changesets SET ts = ? WHERE object_id = ? AND verb = 'item.capture'",
+        params![stale_ts, &note.id],
+    )
+    .unwrap();
+    drop(conn);
+
+    let digest = project.digest().unwrap();
+    assert!(digest.stale_inbox.iter().any(|item| item.id == note.id));
+}
+
+#[test]
+fn grooming_records_rejected_alternatives() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = init_project(dir.path());
+    let a = create_ready_item(&project, ROOT_ID, "A");
+    let b = create_ready_item(&project, ROOT_ID, "B");
+    project
+        .reparent(Reparent {
+            item_id: a.id.clone(),
+            new_parent_id: b.id.clone(),
+            actor: "operator".to_owned(),
+            confirm: false,
+            note: GroomNote {
+                rejected: Some("keep under root".to_owned()),
+                why: Some("B is the real home".to_owned()),
+            },
+        })
+        .unwrap();
+
+    let payload = project
+        .events(Some(&a.id))
+        .unwrap()
+        .into_iter()
+        .find(|event| event.action == "item.reparent")
+        .unwrap()
+        .payload;
+    assert!(payload.contains("\"rejected\":\"keep under root\""));
+    assert!(payload.contains("\"why\":\"B is the real home\""));
 }

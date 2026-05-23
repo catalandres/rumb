@@ -8,11 +8,14 @@ use serde_json::json;
 
 mod capture;
 mod claims;
+mod digest;
 mod graph;
 mod grooming;
 mod history;
 mod model;
+mod replay;
 mod store;
+mod undo;
 use graph::{compute_ready, item_depth};
 pub use model::*;
 pub use store::*;
@@ -255,6 +258,7 @@ impl RumbProject {
                 json!({
                     "actor": &input.actor,
                     "status": item.status.to_string(),
+                    "kind": &item.kind,
                 })
                 .to_string(),
                 now,
@@ -297,6 +301,7 @@ impl RumbProject {
                 json!({
                     "actor": actor,
                     "status": item.status.to_string(),
+                    "kind": &item.kind,
                 })
                 .to_string(),
                 now,

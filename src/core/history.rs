@@ -3,8 +3,8 @@ use serde_json::json;
 
 use super::model::{Edge, Item, RumbError, Status};
 use super::store::{
-    delete_edge_row, edge_row_value, insert_edge, insert_item, item_row_value, load_item,
-    update_item_row, update_item_status_row, with_write_retry,
+    delete_edge_row, delete_item_row, edge_row_value, insert_edge, insert_item, item_row_value,
+    load_item, update_item_row, update_item_status_row, with_write_retry,
 };
 use super::RumbProject;
 
@@ -136,6 +136,22 @@ impl<'c> Mutation<'c> {
             pk_json: json!({ "id": item.id }).to_string(),
             before_json: before.map(|item| item_row_value(&item).to_string()),
             after_json: after.map(|item| item_row_value(&item).to_string()),
+        });
+        Ok(())
+    }
+
+    /// Delete an item, capturing its row image as the `before` of the delta
+    /// (`after` is `None`). Used by `undo` to reverse a create/capture.
+    pub(crate) fn delete_item(&mut self, item: &Item) -> Result<(), RumbError> {
+        let deleted = delete_item_row(&self.tx, &item.id)?;
+        if deleted == 0 {
+            return Err(RumbError::MissingItem(item.id.clone()));
+        }
+        self.deltas.push(DeltaRow {
+            table_name: "items",
+            pk_json: json!({ "id": item.id }).to_string(),
+            before_json: Some(item_row_value(item).to_string()),
+            after_json: None,
         });
         Ok(())
     }

@@ -330,6 +330,131 @@ fn genesis_snapshot(conn: &Connection) -> Result<String, RumbError> {
     Ok(json!({ "items": items, "edges": edges }).to_string())
 }
 
+/// Header of a recorded changeset, for undo/replay reads.
+#[derive(Clone, Debug)]
+pub(crate) struct ChangesetRow {
+    pub seq: i64,
+    pub verb: String,
+    pub object_id: String,
+}
+
+/// One stored row-level change within a changeset.
+#[derive(Clone, Debug)]
+pub(crate) struct DeltaRecord {
+    pub table_name: String,
+    pub pk_json: String,
+    pub before_json: Option<String>,
+    pub after_json: Option<String>,
+}
+
+pub(crate) fn latest_undoable_changeset(
+    conn: &Connection,
+) -> Result<Option<ChangesetRow>, RumbError> {
+    let mut stmt = conn.prepare(
+        "SELECT seq, verb, object_id FROM changesets \
+         WHERE undoable = true ORDER BY seq DESC LIMIT 1",
+    )?;
+    let mut rows = stmt.query_map([], |row| {
+        Ok(ChangesetRow {
+            seq: row.get(0)?,
+            verb: row.get(1)?,
+            object_id: row.get(2)?,
+        })
+    })?;
+    Ok(rows.next().transpose()?)
+}
+
+pub(crate) fn load_changeset_deltas(
+    conn: &Connection,
+    seq: i64,
+) -> Result<Vec<DeltaRecord>, RumbError> {
+    let mut stmt = conn.prepare(
+        "SELECT table_name, pk_json, before_json, after_json FROM deltas \
+         WHERE changeset_seq = ? ORDER BY delta_idx",
+    )?;
+    let rows = stmt.query_map(params![seq], map_delta_record)?;
+    rows.collect::<duckdb::Result<Vec<_>>>().map_err(Into::into)
+}
+
+/// Deltas for changesets in `(lo_exclusive, hi_inclusive]`, ordered for forward replay.
+pub(crate) fn load_deltas_through(
+    conn: &Connection,
+    lo_exclusive: i64,
+    hi_inclusive: i64,
+) -> Result<Vec<DeltaRecord>, RumbError> {
+    let mut stmt = conn.prepare(
+        "SELECT table_name, pk_json, before_json, after_json FROM deltas \
+         WHERE changeset_seq > ? AND changeset_seq <= ? ORDER BY changeset_seq, delta_idx",
+    )?;
+    let rows = stmt.query_map(params![lo_exclusive, hi_inclusive], map_delta_record)?;
+    rows.collect::<duckdb::Result<Vec<_>>>().map_err(Into::into)
+}
+
+fn map_delta_record(row: &duckdb::Row<'_>) -> duckdb::Result<DeltaRecord> {
+    Ok(DeltaRecord {
+        table_name: row.get(0)?,
+        pk_json: row.get(1)?,
+        before_json: row.get(2)?,
+        after_json: row.get(3)?,
+    })
+}
+
+pub(crate) fn max_changeset_seq(conn: &Connection) -> Result<i64, RumbError> {
+    Ok(
+        conn.query_row("SELECT COALESCE(MAX(seq), 0) FROM changesets", [], |row| {
+            row.get(0)
+        })?,
+    )
+}
+
+/// The lowest-seq snapshot row (the genesis snapshot): `(seq, payload_json)`.
+pub(crate) fn genesis_snapshot_row(conn: &Connection) -> Result<(i64, String), RumbError> {
+    conn.query_row(
+        "SELECT seq, payload_json FROM snapshots ORDER BY seq LIMIT 1",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )
+    .map_err(Into::into)
+}
+
+pub(crate) fn set_changeset_not_undoable(conn: &Connection, seq: i64) -> Result<(), RumbError> {
+    conn.execute(
+        "UPDATE changesets SET undoable = false WHERE seq = ?",
+        params![seq],
+    )?;
+    Ok(())
+}
+
+/// Every entity id referenced by changesets after `seq` — each later changeset's
+/// `object_id` plus the item ids and edge endpoints named in its deltas' `pk_json`.
+/// Used by `undo`'s causality guard.
+pub(crate) fn referenced_ids_after(
+    conn: &Connection,
+    seq: i64,
+) -> Result<HashSet<String>, RumbError> {
+    let mut ids = HashSet::new();
+
+    let mut object_stmt = conn.prepare("SELECT object_id FROM changesets WHERE seq > ?")?;
+    let object_rows = object_stmt.query_map(params![seq], |row| row.get::<_, String>(0))?;
+    for row in object_rows {
+        ids.insert(row?);
+    }
+
+    let mut delta_stmt =
+        conn.prepare("SELECT d.pk_json FROM deltas d WHERE d.changeset_seq > ?")?;
+    let pk_rows = delta_stmt.query_map(params![seq], |row| row.get::<_, String>(0))?;
+    for row in pk_rows {
+        let pk: serde_json::Value =
+            serde_json::from_str(&row?).map_err(|err| RumbError::InvalidState(err.to_string()))?;
+        for key in ["id", "from", "to"] {
+            if let Some(value) = pk.get(key).and_then(serde_json::Value::as_str) {
+                ids.insert(value.to_owned());
+            }
+        }
+    }
+    Ok(ids)
+}
+
 pub(crate) fn applied_migrations(conn: &Connection) -> Result<HashSet<i32>, RumbError> {
     let mut versions = HashSet::new();
     let mut stmt = conn.prepare("SELECT version FROM migrations")?;
@@ -382,6 +507,77 @@ pub(crate) fn insert_edge(conn: &Connection, edge: &Edge) -> Result<(), RumbErro
         params![&edge.from, &edge.to, &kind, edge.created_at as i64],
     )?;
     Ok(())
+}
+
+pub(crate) fn delete_item_row(conn: &Connection, id: &str) -> Result<usize, RumbError> {
+    let deleted = conn.execute("DELETE FROM items WHERE id = ?", params![id])?;
+    Ok(deleted)
+}
+
+/// Rebuild an `Item` from a stored delta/snapshot row image (the inverse of
+/// `item_row_value`). Tolerates row images written before migration 6 by
+/// defaulting a missing `tier` to standard and `body` to none.
+pub(crate) fn item_from_row_json(row: &str) -> Result<Item, RumbError> {
+    let value: serde_json::Value =
+        serde_json::from_str(row).map_err(|err| RumbError::InvalidState(err.to_string()))?;
+    let str_field = |key: &str| -> Result<String, RumbError> {
+        value
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+            .ok_or_else(|| RumbError::InvalidState(format!("item row missing {key}")))
+    };
+    let opt_str = |key: &str| {
+        value
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+    };
+    let u64_field = |key: &str| -> Result<u64, RumbError> {
+        value
+            .get(key)
+            .and_then(serde_json::Value::as_u64)
+            .ok_or_else(|| RumbError::InvalidState(format!("item row missing {key}")))
+    };
+    Ok(Item {
+        id: str_field("id")?,
+        parent_id: opt_str("parent_id"),
+        kind: str_field("kind")?,
+        title: str_field("title")?,
+        status: str_field("status")?.parse()?,
+        tier: opt_str("tier")
+            .map(|tier| tier.parse::<Tier>())
+            .transpose()?
+            .unwrap_or_default(),
+        source_ref: opt_str("source_ref"),
+        body: opt_str("body"),
+        created_at: u64_field("created_at")?,
+        updated_at: u64_field("updated_at")?,
+    })
+}
+
+/// Rebuild an `Edge` from a stored delta/snapshot row image (inverse of
+/// `edge_row_value`).
+pub(crate) fn edge_from_row_json(row: &str) -> Result<Edge, RumbError> {
+    let value: serde_json::Value =
+        serde_json::from_str(row).map_err(|err| RumbError::InvalidState(err.to_string()))?;
+    let str_field = |key: &str| -> Result<String, RumbError> {
+        value
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+            .ok_or_else(|| RumbError::InvalidState(format!("edge row missing {key}")))
+    };
+    let created_at = value
+        .get("created_at")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| RumbError::InvalidState("edge row missing created_at".to_owned()))?;
+    Ok(Edge {
+        from: str_field("from")?,
+        to: str_field("to")?,
+        kind: str_field("kind")?.parse()?,
+        created_at,
+    })
 }
 
 const ITEM_COLUMNS: &str =

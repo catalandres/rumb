@@ -5,9 +5,9 @@ use std::process::Command as ProcessCommand;
 use clap::Parser;
 use rumb::cli::{Cli, Command, EdgeCommand, ItemCommand, McpCommand, ViewCommand};
 use rumb::{
-    install_mcp, parse_ttl, AddEdge, Capture, ClaimItem, CreateItem, DoneItem, EditItem,
-    InitOptions, Item, ItemDetails, McpInstallOptions, Merge, MergeOutcome, Recast, ReleaseClaim,
-    RenewClaim, Reparent, ReviewItem, RumbProject, RunCommand, Unlink, UnlinkOutcome,
+    install_mcp, parse_ttl, AddEdge, Capture, ClaimItem, CreateItem, Digest, DoneItem, EditItem,
+    GroomNote, InitOptions, Item, ItemDetails, McpInstallOptions, Merge, MergeOutcome, Recast,
+    ReleaseClaim, RenewClaim, Reparent, ReviewItem, RumbProject, RunCommand, Unlink, UnlinkOutcome,
     UpdateItemStatus,
 };
 
@@ -171,6 +171,8 @@ fn run() -> Result<(), rumb::RumbError> {
             under,
             actor,
             confirm,
+            rejected,
+            why,
         } => {
             let project = RumbProject::discover(cwd)?;
             let item = project.reparent(Reparent {
@@ -178,6 +180,7 @@ fn run() -> Result<(), rumb::RumbError> {
                 new_parent_id: under,
                 actor,
                 confirm,
+                note: GroomNote { rejected, why },
             })?;
             println!(
                 "{}\t{}\t{}\t{}",
@@ -193,6 +196,8 @@ fn run() -> Result<(), rumb::RumbError> {
             source,
             tier,
             actor,
+            rejected,
+            why,
         } => {
             let project = RumbProject::discover(cwd)?;
             let item = project.edit(EditItem {
@@ -201,18 +206,26 @@ fn run() -> Result<(), rumb::RumbError> {
                 source_ref: source,
                 tier,
                 actor,
+                note: GroomNote { rejected, why },
             })?;
             println!(
                 "{}\t{}\t{}\t{}",
                 item.id, item.kind, item.status, item.title
             );
         }
-        Command::Recast { id, kind, actor } => {
+        Command::Recast {
+            id,
+            kind,
+            actor,
+            rejected,
+            why,
+        } => {
             let project = RumbProject::discover(cwd)?;
             let item = project.recast(Recast {
                 item_id: id,
                 kind,
                 actor,
+                note: GroomNote { rejected, why },
             })?;
             println!(
                 "{}\t{}\t{}\t{}",
@@ -224,6 +237,8 @@ fn run() -> Result<(), rumb::RumbError> {
             to,
             kind,
             actor,
+            rejected,
+            why,
         } => {
             let project = RumbProject::discover(cwd)?;
             let outcome = project.unlink(Unlink {
@@ -231,15 +246,23 @@ fn run() -> Result<(), rumb::RumbError> {
                 to,
                 kind,
                 actor,
+                note: GroomNote { rejected, why },
             })?;
             print_unlink(&outcome);
         }
-        Command::Merge { from, into, actor } => {
+        Command::Merge {
+            from,
+            into,
+            actor,
+            rejected,
+            why,
+        } => {
             let project = RumbProject::discover(cwd)?;
             let outcome = project.merge(Merge {
                 from_id: from,
                 into_id: into,
                 actor,
+                note: GroomNote { rejected, why },
             })?;
             print_merge(&outcome);
         }
@@ -250,6 +273,23 @@ fn run() -> Result<(), rumb::RumbError> {
                 "{}\t{}\t{}\t{}",
                 item.id, item.kind, item.status, item.title
             );
+        }
+        Command::Digest => {
+            let project = RumbProject::discover(cwd)?;
+            print_digest(&project.digest()?);
+        }
+        Command::Undo => {
+            let project = RumbProject::discover(cwd)?;
+            let outcome = project.undo()?;
+            println!(
+                "undone\t{}\t{}\t{}",
+                outcome.seq, outcome.verb, outcome.object_id
+            );
+        }
+        Command::At { seq } => {
+            let project = RumbProject::discover(cwd)?;
+            let graph = project.at(seq)?;
+            print_item_tree(&graph.items);
         }
         Command::Mcp {
             command: McpCommand::Serve,
@@ -309,6 +349,47 @@ fn print_claim(claim: &rumb::Claim) {
         "{}\t{}\t{}\t{}\t{}\t{}",
         claim.id, claim.item_id, claim.actor_id, claim.status, claim.branch, claim.worktree_path
     );
+}
+
+fn print_digest(digest: &Digest) {
+    println!("spirals");
+    if digest.spirals.is_empty() {
+        println!("none");
+    } else {
+        for spiral in &digest.spirals {
+            println!(
+                "{}\t{}\t{} failed runs",
+                spiral.item.id, spiral.item.title, spiral.failed_runs
+            );
+        }
+    }
+
+    println!("\nthreads");
+    if digest.threads.is_empty() {
+        println!("none");
+    } else {
+        for thread in &digest.threads {
+            println!("{}\t{}", thread.title, thread.item_ids.join(","));
+        }
+    }
+
+    println!("\nstale_inbox");
+    if digest.stale_inbox.is_empty() {
+        println!("none");
+    } else {
+        for item in &digest.stale_inbox {
+            println!("{}\t{}", item.id, item.title);
+        }
+    }
+
+    println!("\nmomentum");
+    if digest.momentum.is_empty() {
+        println!("none");
+    } else {
+        for entry in &digest.momentum {
+            println!("{}\t{}", entry.kind, entry.count);
+        }
+    }
 }
 
 fn print_unlink(outcome: &UnlinkOutcome) {

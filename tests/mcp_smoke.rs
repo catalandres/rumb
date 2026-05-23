@@ -162,6 +162,9 @@ fn mcp_server_initializes_and_lists_rumb_tools() {
         "recast",
         "unlink",
         "merge",
+        "digest",
+        "undo",
+        "at",
         "log",
     ] {
         assert!(names.contains(&expected), "missing tool {expected}");
@@ -265,6 +268,43 @@ fn mcp_grooming_verbs_reshape_the_graph() {
     assert_eq!(merge["from"]["status"], "superseded");
     assert_eq!(merge["supersedes_edge"]["from"], "RUMB-0003");
     assert_eq!(merge["supersedes_edge"]["to"], "RUMB-0002");
+}
+
+#[test]
+fn mcp_digest_undo_and_at_round_trip() {
+    let dir = tempfile::tempdir().unwrap();
+    init_git_repo(dir.path());
+    let mut client = McpClient::start(dir.path());
+    client.initialize();
+
+    client.call_tool("init", json!({ "name": "rumb" }));
+    // RUMB-0001 is the inbox; A = RUMB-0002, B = RUMB-0003.
+    client.call_tool(
+        "item_create",
+        json!({ "kind": "feature", "title": "A", "parent": "RUMB-0000", "status": "ready" }),
+    );
+    client.call_tool(
+        "item_create",
+        json!({ "kind": "feature", "title": "B", "parent": "RUMB-0000", "status": "ready" }),
+    );
+
+    let reparent = client.call_tool(
+        "reparent",
+        json!({ "id": "RUMB-0002", "under": "RUMB-0003", "actor": "mcp" }),
+    );
+    assert_eq!(reparent["parent_id"], "RUMB-0003");
+
+    let undo = client.call_tool("undo", json!({}));
+    assert_eq!(undo["verb"], "item.reparent");
+    assert_eq!(undo["object_id"], "RUMB-0002");
+
+    let digest = client.call_tool("digest", json!({}));
+    assert!(digest["spirals"].is_array());
+    assert!(digest["momentum"].is_array());
+
+    let at = client.call_tool("at", json!({ "seq": 2 }));
+    let items = at["items"].as_array().unwrap();
+    assert!(items.iter().any(|item| item["id"] == "RUMB-0002"));
 }
 
 #[test]

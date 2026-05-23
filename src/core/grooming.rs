@@ -40,11 +40,13 @@ impl RumbProject {
                 "item.reparent",
                 "item",
                 &item.id,
-                json!({
-                    "actor": &input.actor,
-                    "parent_id": &input.new_parent_id,
-                })
-                .to_string(),
+                with_note(
+                    json!({
+                        "actor": &input.actor,
+                        "parent_id": &input.new_parent_id,
+                    }),
+                    &input.note,
+                ),
                 now,
             );
             m.mark_undoable();
@@ -85,13 +87,15 @@ impl RumbProject {
                 "item.edit",
                 "item",
                 &item.id,
-                json!({
-                    "actor": &input.actor,
-                    "title": input.title.as_deref(),
-                    "source_ref": input.source_ref.as_deref(),
-                    "tier": input.tier.map(|tier| tier.to_string()),
-                })
-                .to_string(),
+                with_note(
+                    json!({
+                        "actor": &input.actor,
+                        "title": input.title.as_deref(),
+                        "source_ref": input.source_ref.as_deref(),
+                        "tier": input.tier.map(|tier| tier.to_string()),
+                    }),
+                    &input.note,
+                ),
                 now,
             );
             m.mark_undoable();
@@ -122,12 +126,14 @@ impl RumbProject {
                 "item.recast",
                 "item",
                 &item.id,
-                json!({
-                    "actor": &input.actor,
-                    "kind": &input.kind,
-                    "previous_kind": previous_kind,
-                })
-                .to_string(),
+                with_note(
+                    json!({
+                        "actor": &input.actor,
+                        "kind": &input.kind,
+                        "previous_kind": previous_kind,
+                    }),
+                    &input.note,
+                ),
                 now,
             );
             m.mark_undoable();
@@ -169,13 +175,15 @@ impl RumbProject {
                 "edge.unlink",
                 "edge",
                 &format!("{}->{}", input.from, input.to),
-                json!({
-                    "actor": &input.actor,
-                    "from": &input.from,
-                    "to": &input.to,
-                    "kind": input.kind.to_string(),
-                })
-                .to_string(),
+                with_note(
+                    json!({
+                        "actor": &input.actor,
+                        "from": &input.from,
+                        "to": &input.to,
+                        "kind": input.kind.to_string(),
+                    }),
+                    &input.note,
+                ),
                 now,
             );
             m.mark_undoable();
@@ -270,13 +278,15 @@ impl RumbProject {
                 "item.merge",
                 "item",
                 &from.id,
-                json!({
-                    "actor": &input.actor,
-                    "from": &from.id,
-                    "into": &into.id,
-                    "moved_children": &moved_children,
-                })
-                .to_string(),
+                with_note(
+                    json!({
+                        "actor": &input.actor,
+                        "from": &from.id,
+                        "into": &into.id,
+                        "moved_children": &moved_children,
+                    }),
+                    &input.note,
+                ),
                 now,
             );
             m.mark_undoable();
@@ -288,6 +298,21 @@ impl RumbProject {
             })
         })
     }
+}
+
+/// Merge an optional rejected-alternative note into a grooming verb's intent
+/// payload, so history records *why* (and what was rejected), not just *what*.
+fn with_note(value: serde_json::Value, note: &GroomNote) -> String {
+    let mut value = value;
+    if let serde_json::Value::Object(map) = &mut value {
+        if let Some(rejected) = &note.rejected {
+            map.insert("rejected".to_owned(), json!(rejected));
+        }
+        if let Some(why) = &note.why {
+            map.insert("why".to_owned(), json!(why));
+        }
+    }
+    value.to_string()
 }
 
 /// Rewrite an edge endpoint during a merge: `from` becomes `into`, everything
