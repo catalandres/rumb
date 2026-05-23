@@ -165,6 +165,11 @@ Events are append-only and ordered by `seq`. The actions rumb emits:
 | `item.merge` | item merged into another, superseded (undoable) | item ID (the source) |
 | `edge.unlink` | edge removed (undoable) | `from->to` |
 | `item.capture` | note captured into the inbox (undoable) | item ID |
+| `undo` | reversed the most recent undoable changeset | the reversed changeset's `object_id` |
+
+The `item.status`/`item.review`/`item.done` payloads record the item's `kind` at the
+time of the transition, so `rumb digest` momentum can group by kind-at-done without a
+later `recast` rewriting history. Grooming payloads also carry optional `rejected`/`why`.
 
 ## Concurrency and durability
 

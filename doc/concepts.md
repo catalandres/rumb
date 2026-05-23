@@ -228,13 +228,47 @@ init          item.create   item.status   edge.add
 claim.reserve claim.create  claim.failed  claim.renew  claim.release
 run.record    item.review   item.done
 item.reparent item.edit     item.recast   item.merge   edge.unlink
-item.capture
+item.capture  undo
 ```
 
-Grooming events (`item.reparent`, `item.edit`, `item.recast`, `item.merge`, and
-`edge.unlink`) are recorded as **undoable** changesets; lifecycle events above
-them are not. `edge.unlink` uses `from->to` as its `object_id` (like `edge.add`),
-so it does not appear in an item's filtered log.
+Grooming events (`item.reparent`, `item.edit`, `item.recast`, `item.merge`,
+`edge.unlink`, and `item.capture`) are recorded as **undoable** changesets;
+lifecycle events above them are not. `edge.unlink` uses `from->to` as its
+`object_id` (like `edge.add`), so it does not appear in an item's filtered log.
+Grooming verbs also accept optional `--rejected`/`--why`, recorded in the event
+payload so the history says not just *what* changed but *why*, and what was
+rejected.
+
+## History: undo and `at`
+
+Every state change is a **changeset** with row-level before/after **deltas**, on a
+single monotonic `seq`. That makes history both reversible and replayable.
+
+- **`undo`** reverses the most recent undoable changeset by applying each delta's
+  inverse (re-create a deleted row, delete a created one, restore an updated one) as
+  a new `undo` changeset. It is conservative: if a *later* changeset references the
+  same items, their descendants, or the touched edge endpoints, `undo` refuses
+  rather than silently cascade. Repeated `undo` walks back move by move; the
+  reversed changeset is consumed so it is not undone twice. Lifecycle moves
+  (claims, runs, status) are not undoable.
+- **`at <seq>`** reproduces the graph as it stood at a past `seq` — read-only,
+  writing nothing. It starts from the genesis snapshot and replays deltas forward.
+  Because the inbox is seeded as infrastructure outside the changeset timeline, it
+  is layered into the reconstruction rather than replayed.
+
+## Digest
+
+`rumb digest` is a deterministic, computed read of where the project is going — no
+model, just fixed thresholds over the graph, runs, and event log:
+
+- **spirals** — items burning **3+ consecutive failed runs** with no status
+  movement in between.
+- **threads** — **2+ items** whose titles match after case + whitespace
+  normalization (literal recurrence, not semantic similarity).
+- **stale inbox** — inbox captures with no event in the last **7 days**.
+- **momentum** — items moved to `done` in the last **7 days**, grouped by the
+  item's kind *at the time it was done* (a later `recast` does not rewrite the
+  count).
 
 `rumb log` prints events in sequence order. `rumb log <id>` filters by
 `object_id`. Most item-related events (claims, runs, reviews) use the item ID as

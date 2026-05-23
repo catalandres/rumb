@@ -115,7 +115,9 @@ is unchanged; with no active claim left it appears in `rumb ready` again.
 ## Grooming
 
 These verbs reshape the graph after items exist. Each is recorded as an undoable
-changeset. See [Grooming](concepts.md#grooming) for the full semantics.
+changeset and accepts optional `--rejected <text>` and `--why <text>`, stored in the
+event payload to record the reasoning behind the move. See
+[Grooming](concepts.md#grooming) for the full semantics.
 
 ### `rumb reparent <id> --under <parent> --actor <actor> [--confirm]`
 
@@ -157,6 +159,28 @@ at intake. The full text is stored in the item's `body`; the `title` is a
 whitespace-collapsed, truncated one-line summary. Captures land as `draft`, so
 they do not appear in `rumb ready` until you groom them out of the inbox
 (`reparent`/`recast`/`edit`). Prints `id  kind  status  title`.
+
+## History
+
+See [History](concepts.md#history-undo-and-at) and
+[Digest](concepts.md#digest) for the full semantics.
+
+### `rumb digest`
+
+Print the deterministic digest: spiraling items (3+ consecutive failed runs with no
+status movement), recurring title threads, stale inbox captures (>7 days), and recent
+done-momentum by kind. Sections are `spirals`, `threads`, `stale_inbox`, `momentum`.
+
+### `rumb undo`
+
+Reverse the most recent undoable change (a grooming or capture move). Refuses if a
+later change depends on the same items, their descendants, or the touched edges.
+Prints `undone  seq  verb  object-id`.
+
+### `rumb at <seq>`
+
+Print the item tree as it stood at changeset `<seq>` — read-only, writes nothing.
+Rejects a `<seq>` before the genesis snapshot or beyond the latest change.
 
 ## Verification
 
