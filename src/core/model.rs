@@ -71,6 +71,12 @@ pub enum RumbError {
     NoGroomingChanges,
     #[error("cannot merge an item into itself: {0}")]
     CannotMergeIntoSelf(String),
+    #[error("nothing to undo")]
+    NothingToUndo,
+    #[error("cannot undo: {0}")]
+    UndoBlocked(String),
+    #[error("seq out of range: {0}")]
+    SeqOutOfRange(i64),
     #[error("git command failed: {0}")]
     GitFailed(String),
     #[error("mcp install error: {0}")]
@@ -147,12 +153,21 @@ pub struct DoneItem {
     pub actor: String,
 }
 
+/// Optional "what did you reject and why" recorded alongside a grooming move, so
+/// the history teaches the reasoning, not just the change.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct GroomNote {
+    pub rejected: Option<String>,
+    pub why: Option<String>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Reparent {
     pub item_id: String,
     pub new_parent_id: String,
     pub actor: String,
     pub confirm: bool,
+    pub note: GroomNote,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -162,6 +177,7 @@ pub struct EditItem {
     pub source_ref: Option<String>,
     pub tier: Option<Tier>,
     pub actor: String,
+    pub note: GroomNote,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -174,6 +190,7 @@ pub struct Recast {
     pub item_id: String,
     pub kind: String,
     pub actor: String,
+    pub note: GroomNote,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -182,6 +199,7 @@ pub struct Unlink {
     pub to: String,
     pub kind: EdgeKind,
     pub actor: String,
+    pub note: GroomNote,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -189,6 +207,7 @@ pub struct Merge {
     pub from_id: String,
     pub into_id: String,
     pub actor: String,
+    pub note: GroomNote,
 }
 
 /// Result of `unlink`: the removed edge plus any items that became ready as a
@@ -208,6 +227,52 @@ pub struct MergeOutcome {
     pub into: Item,
     pub moved_children: Vec<String>,
     pub supersedes_edge: Edge,
+}
+
+/// A deterministic, computed "where are we going?" view over the graph + history.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Digest {
+    pub spirals: Vec<Spiral>,
+    pub threads: Vec<Thread>,
+    pub stale_inbox: Vec<Item>,
+    pub momentum: Vec<Momentum>,
+}
+
+/// An item burning consecutive failed runs with no status movement.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Spiral {
+    pub item: Item,
+    pub failed_runs: usize,
+}
+
+/// Two or more items whose titles recur (literal match after normalization).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Thread {
+    pub title: String,
+    pub item_ids: Vec<String>,
+}
+
+/// Count of items moved to `done` in the window, by kind-at-time-of-done.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Momentum {
+    pub kind: String,
+    pub count: usize,
+}
+
+/// Result of `undo`: which changeset was reversed.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UndoOutcome {
+    pub seq: i64,
+    pub verb: String,
+    pub object_id: String,
+}
+
+/// Read-only reconstruction of the graph as of a past changeset seq.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GraphAt {
+    pub seq: i64,
+    pub items: Vec<Item>,
+    pub edges: Vec<Edge>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

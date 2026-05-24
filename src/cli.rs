@@ -78,6 +78,10 @@ pub enum Command {
         actor: String,
         #[arg(long)]
         confirm: bool,
+        #[arg(long)]
+        rejected: Option<String>,
+        #[arg(long)]
+        why: Option<String>,
     },
     Edit {
         id: String,
@@ -89,6 +93,10 @@ pub enum Command {
         tier: Option<Tier>,
         #[arg(long)]
         actor: String,
+        #[arg(long)]
+        rejected: Option<String>,
+        #[arg(long)]
+        why: Option<String>,
     },
     Recast {
         id: String,
@@ -96,6 +104,10 @@ pub enum Command {
         kind: String,
         #[arg(long)]
         actor: String,
+        #[arg(long)]
+        rejected: Option<String>,
+        #[arg(long)]
+        why: Option<String>,
     },
     Unlink {
         from: String,
@@ -104,6 +116,10 @@ pub enum Command {
         kind: EdgeKind,
         #[arg(long)]
         actor: String,
+        #[arg(long)]
+        rejected: Option<String>,
+        #[arg(long)]
+        why: Option<String>,
     },
     Merge {
         from: String,
@@ -111,9 +127,18 @@ pub enum Command {
         into: String,
         #[arg(long)]
         actor: String,
+        #[arg(long)]
+        rejected: Option<String>,
+        #[arg(long)]
+        why: Option<String>,
     },
     Capture {
         text: String,
+    },
+    Digest,
+    Undo,
+    At {
+        seq: i64,
     },
     Mcp {
         #[command(subcommand)]
@@ -354,6 +379,7 @@ mod tests {
                 under,
                 actor,
                 confirm,
+                ..
             } => {
                 assert_eq!(id, "RUMB-0002");
                 assert_eq!(under, "RUMB-0000");
@@ -383,6 +409,7 @@ mod tests {
                 source,
                 tier,
                 actor,
+                ..
             } => {
                 assert_eq!(id, "RUMB-0002");
                 assert_eq!(title.as_deref(), Some("New title"));
@@ -407,7 +434,9 @@ mod tests {
         ]);
 
         match cli.command {
-            Command::Recast { id, kind, actor } => {
+            Command::Recast {
+                id, kind, actor, ..
+            } => {
                 assert_eq!(id, "RUMB-0002");
                 assert_eq!(kind, "spec");
                 assert_eq!(actor, "operator");
@@ -435,6 +464,7 @@ mod tests {
                 to,
                 kind,
                 actor,
+                ..
             } => {
                 assert_eq!(from, "RUMB-0001");
                 assert_eq!(to, "RUMB-0002");
@@ -480,6 +510,51 @@ mod tests {
     }
 
     #[test]
+    fn parses_at_seq() {
+        let cli = Cli::parse_from(["rumb", "at", "7"]);
+        match cli.command {
+            Command::At { seq } => assert_eq!(seq, 7),
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_digest_and_undo() {
+        assert!(matches!(
+            Cli::parse_from(["rumb", "digest"]).command,
+            Command::Digest
+        ));
+        assert!(matches!(
+            Cli::parse_from(["rumb", "undo"]).command,
+            Command::Undo
+        ));
+    }
+
+    #[test]
+    fn parses_reparent_with_rejected_alternative() {
+        let cli = Cli::parse_from([
+            "rumb",
+            "reparent",
+            "RUMB-0002",
+            "--under",
+            "RUMB-0003",
+            "--actor",
+            "op",
+            "--rejected",
+            "leave it",
+            "--why",
+            "B fits better",
+        ]);
+        match cli.command {
+            Command::Reparent { rejected, why, .. } => {
+                assert_eq!(rejected.as_deref(), Some("leave it"));
+                assert_eq!(why.as_deref(), Some("B fits better"));
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
     fn parses_merge() {
         let cli = Cli::parse_from([
             "rumb",
@@ -492,7 +567,9 @@ mod tests {
         ]);
 
         match cli.command {
-            Command::Merge { from, into, actor } => {
+            Command::Merge {
+                from, into, actor, ..
+            } => {
                 assert_eq!(from, "RUMB-0003");
                 assert_eq!(into, "RUMB-0002");
                 assert_eq!(actor, "operator");
